@@ -25,9 +25,9 @@ object StylePacks {
         StyleId.IOS -> ios(dark)
         StyleId.GPT -> gpt(dark)
         StyleId.CLAUDE -> claude(dark)
-        // 方舟的识别度完全建立在深底荧光黄上，浅色版会变成橄榄黄，
-        // 所以这一套不跟随系统深浅，始终用深色令牌
-        StyleId.ARK -> ark(true)
+        // 方舟浅色不再锁深色：旧浅色版是「琥珀黄直上浅底」（3.7:1 发脏）才被迫恒暗；
+        // 现在浅色按反相处理（近黑强调 + 荧光黄只上填充件），可以跟随系统深浅了
+        StyleId.ARK -> ark(dark)
     }
 
     // ── GPT：纯白、极细描边、超大标题、超大等宽数字 ──
@@ -103,9 +103,11 @@ object StylePacks {
     private fun gpt(dark: Boolean): StylePack {
         val p = if (dark) Palette(
             canvas = Color(0xFF0C0D0F),
-            surface = Color(0xFF131417),
-            surfaceSunken = Color(0xFF191B1F),
-            surfaceTonal = Color(0xFF1D2025),
+            // surface 原来只比画布亮 ~7/255，卡片在纯黑页面上几乎隐形（审计实拍确认）；
+            // 抬一档拉开层次，sunken/tonal 跟着保持相对秩序
+            surface = Color(0xFF1A1C21),
+            surfaceSunken = Color(0xFF22252B),
+            surfaceTonal = Color(0xFF272B32),
             ink = Color(0xFFECEDEF),
             inkMuted = Color(0xFF9BA1AC),
             inkSubtle = Color(0xFF6C727C),
@@ -248,9 +250,11 @@ object StylePacks {
             ink = Color(0xFF11171A),
             inkMuted = Color(0xFF5C6870),
             inkSubtle = Color(0xFF8A959C),
-            hairline = Color(0xFFD5DADE),
-            accent = Color(0xFFB58900),
-            accentInk = Color(0xFF171400),
+            hairline = Color(0xFFC3CBD1),
+            // 明色按「反相」处理：强调色给近黑（链接/选中文字压浅底仍有高对比），
+            // 荧光黄只活在填充件上（黑芯片+黄字）。琥珀黄直上浅底只有 3.7:1 且发脏
+            accent = Color(0xFF171B20),
+            accentInk = Color(0xFFF3D24B),
             positive = Color(0xFF2F7D5B),
             warning = Color(0xFF8A6A00),
             danger = Color(0xFFB4453A),

@@ -190,7 +190,8 @@ fun WalletScreen(viewModel: MainViewModel) {
                     Spacer(Modifier.height(4.dp))
                     Text(displayBalance?.let { "¥ ${BalanceEstimator.formatMoney(it)}" } ?: "¥ —",
                         style = Design.type.number, color = Design.palette.ink)
-                    Spacer(Modifier.height(8.dp))
+                    // 金额是这张卡的唯一主角：与下方来源说明拉开一档，层级才立得起来
+                    Spacer(Modifier.height(12.dp))
                     // 三个来源要分别说清是哪来的：都写成「校园卡」的话，
                     // 显示趣智校园钱包余额的学校会对不上账。
                     Text(

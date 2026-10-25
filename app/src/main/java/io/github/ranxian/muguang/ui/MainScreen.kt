@@ -19,6 +19,7 @@ import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.layout.ContentScale
 import io.github.ranxian.muguang.ui.design.CubeSpinner
+import io.github.ranxian.muguang.ui.design.Design
 import io.github.ranxian.muguang.ui.design.RadarProbe
 import io.github.ranxian.muguang.ui.design.WashingMachineLoader
 import androidx.compose.ui.text.font.FontFamily
@@ -34,7 +35,6 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.ExperimentalMaterialApi
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.pullrefresh.rememberPullRefreshState
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
@@ -203,12 +203,17 @@ fun MainScreen(phone: String, viewModel: MainViewModel = viewModel()) {
     val homeHero = FontFamily(Font(R.font.zhi_mang_xing_regular))
     val rocksteadyFamily = FontFamily(Font(R.font.rocksteady_regular))
     val heroInk = Color(0xFFF5F5F7)
-    val heroSub = Color(0xB3F5F5F7)
-    // 玻璃卡里的字：白 72% 的卡面在照片上最暗也只到 ~#7A7A7A、最亮到纯白，
-    // 白字压上去在雪山上只有 1.4:1，所以卡面改「白霜玻璃 + 深墨」——
-    // 两个极端下深墨都有 ≥9:1，和底部抽屉的白霜材质也统一。
-    val cardInk = Color(0xFF1D1D1F)
-    val cardInkSub = Color(0xFF4A4A4F)
+    // 70% 白在雪山亮部只剩 ~3.2:1，提到 80%：暗部观感不变，亮部小字达标
+    val heroSub = Color(0xCCF5F5F7)
+    // 玻璃卡材质分两套：浅色模式「白霜玻璃 + 深墨」——白 72% 的卡面在照片上
+    // 最暗也只到 ~#7A7A7A，白字压上去只有 1.4:1，深墨两个极端都有 ≥9:1；
+    // 深色模式换「暗玻璃 + 浅墨」——白霜卡在暗色抽屉旁边就是一块灰白厚板，
+    // 和整页深色材质接不上，暗玻璃仍透一点照片，与抽屉深色面板同一语言
+    val frostDark = Design.palette.isDark
+    val frostBg = if (frostDark) Color(0x9E000000) else Color.White.copy(alpha = 0.72f)
+    val frostBorder = if (frostDark) Color(0x33FFFFFF) else Color.White.copy(alpha = 0.55f)
+    val cardInk = if (frostDark) Color(0xFFF5F5F7) else Color(0xFF1D1D1F)
+    val cardInkSub = if (frostDark) Color(0xFFB9BDC5) else Color(0xFF4A4A4F)
     val useCustomBg = BackgroundState.config(BackgroundManager.SCOPE_HOME).enabled
     // 余额卡底部那行洗衣机摘要：一台给状态，两台给「几台在用」的合计——
     // 两台的名字和明细放「我的洗衣机」卡片，这一行只做一眼扫读
@@ -255,9 +260,13 @@ fun MainScreen(phone: String, viewModel: MainViewModel = viewModel()) {
                         .fillMaxSize()
                         .background(
                             Brush.verticalGradient(
+                                // 上半程的遮罩要压到雪山高光也撑得住白字：
+                                // 旧版 0.30f/0x57 下，副标题高度上的雪面仍有 ~#F0，
+                                // 70% 白字只剩 ~2.6:1。0x8F 拉到 0.40f 后副标题 ≥4.5:1，
+                                // 中段（0.62f 起）恢复透亮，照片下半部不受影响
                                 0f to Color(0xC2000000),
-                                0.30f to Color(0x57000000),
-                                0.55f to Color(0x24000000),
+                                0.40f to Color(0x8F000000),
+                                0.62f to Color(0x24000000),
                                 1f to Color(0x8C000000)
                             )
                         )
@@ -300,7 +309,7 @@ fun MainScreen(phone: String, viewModel: MainViewModel = viewModel()) {
                         .statusBarsPadding()
                 ) {
                     Spacer(Modifier.height(8.dp))
-                    // ── 品牌行：Rocksteady 眉题 + 扫码 / 刷新 ──
+                    // ── 品牌行：Rocksteady 眉题 + 扫码 ──
                     Row(
                         Modifier
                             .fillMaxWidth()
@@ -322,16 +331,6 @@ fun MainScreen(phone: String, viewModel: MainViewModel = viewModel()) {
                             tint = heroInk,
                         ) {
                             scanLauncher.launch(Intent(context, QrScanActivity::class.java))
-                        }
-                        // 钮的可点区域 48dp、玻璃圆面仍是 40dp，间距用 2dp 补回原来的 10dp 视觉间隔
-                        Spacer(Modifier.width(2.dp))
-                        RoundNavBtn(
-                            contentDescription = "刷新设备列表",
-                            iconVector = Icons.Default.Refresh,
-                            tint = heroInk,
-                        ) {
-                            viewModel.pullRefresh()
-                            scanWithPermission()
                         }
                     }
                     Spacer(Modifier.height(12.dp))
@@ -367,8 +366,8 @@ fun MainScreen(phone: String, viewModel: MainViewModel = viewModel()) {
                             .padding(horizontal = 16.dp)
                             .fillMaxWidth()
                             .clip(RoundedCornerShape(20.dp))
-                            .background(Color.White.copy(alpha = 0.72f))
-                            .border(1.dp, Color.White.copy(alpha = 0.55f), RoundedCornerShape(20.dp))
+                            .background(frostBg)
+                            .border(1.dp, frostBorder, RoundedCornerShape(20.dp))
                             .padding(16.dp)
                     ) {
                         Column {
@@ -431,12 +430,12 @@ fun MainScreen(phone: String, viewModel: MainViewModel = viewModel()) {
                                 .fillMaxWidth()
                                 .padding(horizontal = 16.dp)
                                 .clip(RoundedCornerShape(999.dp))
-                                .background(Color.White.copy(alpha = 0.72f))
+                                .background(frostBg)
                                 .padding(start = 12.dp, end = 4.dp),
                             verticalAlignment = Alignment.CenterVertically
                         ) {
                             Text(
-                                "🏠 已筛选：${DeviceInfo.roomKey(viewModel.boundRoom) ?: viewModel.boundRoom}",
+                                "已筛选 · ${DeviceInfo.roomKey(viewModel.boundRoom) ?: viewModel.boundRoom}",
                                 color = cardInk, fontSize = 12.sp, fontFamily = homeBody,
                                 maxLines = 1, overflow = TextOverflow.Ellipsis,
                                 modifier = Modifier.weight(1f, fill = false)
@@ -1223,13 +1222,15 @@ private fun P1WasherCard(
             nowMs = System.currentTimeMillis()
         }
     }
+    // 与余额卡同一套玻璃材质：暗色模式换暗玻璃（frostBg 的说明见 MainScreen 顶部）
+    val frostDark = Design.palette.isDark
     Box(
         Modifier
             .padding(horizontal = 16.dp)
             .fillMaxWidth()
             .clip(RoundedCornerShape(20.dp))
-            .background(Color.White.copy(alpha = 0.72f))
-            .border(1.dp, Color.White.copy(alpha = 0.55f), RoundedCornerShape(20.dp))
+            .background(if (frostDark) Color(0x9E000000) else Color.White.copy(alpha = 0.72f))
+            .border(1.dp, if (frostDark) Color(0x33FFFFFF) else Color.White.copy(alpha = 0.55f), RoundedCornerShape(20.dp))
             .padding(horizontal = 16.dp, vertical = 12.dp)
     ) {
         Column {
@@ -1254,7 +1255,7 @@ private fun P1WasherCard(
                         Modifier
                             .fillMaxWidth()
                             .height(1.dp)
-                            .background(Color(0x14000000))
+                            .background(if (frostDark) Color(0x1FFFFFFF) else Color(0x14000000))
                     )
                 }
                 val view = viewFor(device.snCode)
@@ -1290,7 +1291,7 @@ private fun P1WasherCard(
                             overflow = TextOverflow.Ellipsis
                         )
                     }
-                    Text("›", fontSize = 16.sp, color = Color(0x661D1D1F))
+                    Text("›", fontSize = 16.sp, color = if (frostDark) Color(0x80F5F5F7) else Color(0x661D1D1F))
                 }
             }
         }
