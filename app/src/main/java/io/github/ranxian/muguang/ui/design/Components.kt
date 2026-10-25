@@ -504,16 +504,26 @@ fun DayNightToggle(
                 Modifier
                     .offset(x = knobX)
                     .size(height - 6.dp)
+                    // 实心底是硬要求：底下压着淡显的对侧图标，滑块一旦带透明度
+                    // （旧版径向渐变中心 alpha 0.06、边缘 0.92）图标就从滑块里
+                    // 隐约透出来，看着像「太阳背后还有个太阳」
                     .clip(CircleShape)
-                    .background(
-                        Brush.radialGradient(
-                            0f to p.accent.copy(alpha = 0.30f * glow + 0.06f),
-                            0.7f to p.accent,
-                            1f to p.accent.copy(alpha = 0.92f)
-                        )
-                    ),
+                    .background(p.accent),
                 contentAlignment = Alignment.Center
             ) {
+                // 暗态月光核：叠在实心底**之上**的白色渐变，只提亮、不可能透底
+                if (glow > 0.01f) {
+                    Box(
+                        Modifier
+                            .fillMaxSize()
+                            .background(
+                                Brush.radialGradient(
+                                    0f to Color.White.copy(alpha = 0.28f * glow),
+                                    1f to Color.Transparent
+                                )
+                            )
+                    )
+                }
                 // 滑块上带当前模式的图标：accent 底压 canvas 色，四风格 × 日夜都有对比；
                 // 「现在是什么」看滑块，「点了去哪」看另一侧淡显图标
                 Icon(
