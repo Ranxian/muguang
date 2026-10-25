@@ -543,7 +543,15 @@ class MainViewModel : ViewModel() {
      * 刷新本来就由界面的秒级倒数驱动，串行多花的几百毫秒感知不到。
      * 任一台的结果只写自己的 snCode 槽位，互不覆盖。
      */
+    /**
+     * debug 预览专用（PreviewActivity 置位，正式包永远 false）：
+     * 冻结绑定洗衣机的自动刷新——预览灌的是假 SN，真请求只会把
+     * 「剩余 21:35」这种演示态翻成「未能获取设备状态」，看不到效果。
+     */
+    var previewFreezeBoundRefresh = false
+
     fun refreshBoundWashers() {
+        if (previewFreezeBoundRefresh) return
         val devices = boundWashers
         if (devices.isEmpty()) return
         if (boundWasherRefreshing) return

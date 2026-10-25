@@ -135,6 +135,9 @@ io.github.ranxian.muguang.ui.theme.CircularRevealThemeHost(
     @androidx.compose.runtime.Composable
     private fun MainTabsPreview(startTab: Int) {
         val vm: MainViewModel = viewModel()
+        // 假数据只用来演示 UI：冻结绑定刷新，免得假 SN 的失败请求
+        // 把「剩余 21:35」翻成「未能获取设备状态」
+        vm.previewFreezeBoundRefresh = true
         if (!PrefsHelper.isLoggedIn) fillFakeState(vm)
         var tab by remember { mutableIntStateOf(startTab) }
         Box(Modifier.fillMaxSize()) {
