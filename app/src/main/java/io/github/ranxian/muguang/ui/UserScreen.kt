@@ -42,6 +42,7 @@ import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.layout.boundsInRoot
 import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalLifecycleOwner
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.SpanStyle
 import androidx.compose.ui.text.buildAnnotatedString
@@ -53,6 +54,8 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.text.withStyle
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.LifecycleEventObserver
 import io.github.ranxian.muguang.BuildConfig
 import io.github.ranxian.muguang.R
 import io.github.ranxian.muguang.utils.MD5Utils
@@ -267,12 +270,17 @@ fun UserScreen(
             PlaintextStorageWarning()
             Spacer(Modifier.height(16.dp))
         }
-        val visibleCards = if (editMode) profileCardOrder else profileCardOrder.filter { it.name !in profileHiddenCards }
+        // 钉住的卡片（账户信息 / 充值）即使残留在旧存档的隐藏列表里也必须显示
+        val visibleCards = if (editMode) profileCardOrder
+            else profileCardOrder.filter { type ->
+                type in UserCardLayoutPolicy.pinned || type.name !in profileHiddenCards
+            }
         visibleCards.forEachIndexed { index, type ->
             EditableCardSlot(
                 editMode = editMode,
                 title = type.title,
                 isHidden = type.name in profileHiddenCards,
+                pinned = type in UserCardLayoutPolicy.pinned,
                 canMoveUp = index > 0,
                 canMoveDown = index < visibleCards.lastIndex,
                 onMoveUp = {
@@ -400,12 +408,16 @@ private fun SettingsScreen(
         // 风格选择固定在列表之前：它不参与卡片排序，也永远不该被隐藏
         StylePickerCard()
         Spacer(Modifier.height(12.dp))
-        val visibleCards = if (editMode) cardOrder else cardOrder.filter { it.name !in hiddenCards }
+        val visibleCards = if (editMode) cardOrder
+            else cardOrder.filter { type ->
+                type in UserCardLayoutPolicy.pinned || type.name !in hiddenCards
+            }
         visibleCards.forEachIndexed { index, type ->
             EditableCardSlot(
                 editMode = editMode,
                 title = type.title,
                 isHidden = type.name in hiddenCards,
+                pinned = type in UserCardLayoutPolicy.pinned,
                 canMoveUp = index > 0,
                 canMoveDown = index < visibleCards.lastIndex,
                 onMoveUp = {
@@ -482,6 +494,8 @@ private fun EditableCardSlot(
     editMode: Boolean,
     title: String,
     isHidden: Boolean,
+    /** 钉住的卡片只能排序：不提供「移到另一页」和「隐藏」，避免入口凭空消失 */
+    pinned: Boolean = false,
     canMoveUp: Boolean,
     canMoveDown: Boolean,
     onMoveUp: () -> Unit,
@@ -504,8 +518,12 @@ private fun EditableCardSlot(
                     color = if (isHidden) AppColors.TextSecondary.copy(alpha = 0.6f) else AppColors.TextSecondary,
                     modifier = Modifier.weight(1f)
                 )
-                IconButton(onClick = onMoveToOtherPage, modifier = Modifier.size(34.dp)) {
-                    Icon(moveToOtherPageIcon, moveToOtherPageDescription, tint = AppColors.Accent)
+                IconButton(onClick = onMoveToOtherPage, modifier = Modifier.size(34.dp),
+                    enabled = !pinned) {
+                    Icon(
+                        moveToOtherPageIcon, moveToOtherPageDescription,
+                        tint = if (pinned) AppColors.TextSecondary.copy(alpha = 0.25f) else AppColors.Accent
+                    )
                 }
                 IconButton(onClick = onMoveUp, enabled = canMoveUp, modifier = Modifier.size(34.dp)) {
                     Icon(Icons.Default.KeyboardArrowUp, "上移",
@@ -515,13 +533,18 @@ private fun EditableCardSlot(
                     Icon(Icons.Default.KeyboardArrowDown, "下移",
                         tint = if (canMoveDown) AppColors.Accent else AppColors.TextSecondary.copy(alpha = 0.3f))
                 }
-                IconButton(onClick = onToggleHide, modifier = Modifier.size(34.dp)) {
+                IconButton(onClick = onToggleHide, modifier = Modifier.size(34.dp),
+                    enabled = !pinned) {
                     Icon(
                         painterResource(
                             if (isHidden) R.drawable.ic_visibility else R.drawable.ic_visibility_off
                         ),
                         if (isHidden) "显示" else "隐藏",
-                        tint = if (isHidden) AppColors.Success else AppColors.TextSecondary
+                        tint = when {
+                            pinned -> AppColors.TextSecondary.copy(alpha = 0.25f)
+                            isHidden -> AppColors.Success
+                            else -> AppColors.TextSecondary
+                        }
                     )
                 }
             }
@@ -964,6 +987,10 @@ private fun DownloadSection(
     // 点「立即安装」后如果调起失败（包丢了 / 没有可用设置页），要在这里说清楚
     var installError by remember { mutableStateOf<String?>(null) }
 
+    // 授权那一步可能把进程杀掉（系统改 appop 时会 kill），回来后状态是空的。
+    // 缓存里的包还能用，先认回来，别让用户为同一个包下两遍。
+    LaunchedEffect(Unit) { ApkUpdater.recoverDownload(context) }
+
     val asset = release?.apkAsset
     // 首选 Gitee 镜像（大陆约 2 MB/s），失败回落 GitHub 原链
     val downloadUrl = if (UpdateApi.configured) release?.directApkUrl else null
@@ -1019,6 +1046,20 @@ private fun DownloadSection(
         }
 
         is ApkDownloadState.Done -> {
+            // 授权状态在离开页面去设置时可能变化（首次授权还会顺带杀掉进程），
+            // 所以每次回到前台都重新读一遍，而不是只在首帧算一次
+            var needsPermission by remember { mutableStateOf(ApkUpdater.needsInstallPermission(context)) }
+            val lifecycleOwner = LocalLifecycleOwner.current
+            DisposableEffect(lifecycleOwner) {
+                val observer = LifecycleEventObserver { _, event ->
+                    if (event == Lifecycle.Event.ON_RESUME) {
+                        needsPermission = ApkUpdater.needsInstallPermission(context)
+                    }
+                }
+                lifecycleOwner.lifecycle.addObserver(observer)
+                onDispose { lifecycleOwner.lifecycle.removeObserver(observer) }
+            }
+
             Text("更新包已下载完成", color = AppColors.Success, fontSize = 13.sp,
                 fontWeight = FontWeight.Medium)
             Spacer(Modifier.height(8.dp))
@@ -1028,16 +1069,28 @@ private fun DownloadSection(
                         is ApkInstallResult.Error -> r.message
                         else -> null
                     }
+                    needsPermission = ApkUpdater.needsInstallPermission(context)
                 },
                 shape = RoundedCornerShape(12.dp),
                 modifier = Modifier.fillMaxWidth(),
                 colors = ButtonDefaults.buttonColors(containerColor = AppColors.Success)
             ) { Text("立即安装") }
-            Spacer(Modifier.height(6.dp))
-            Text(
-                "请在系统设置里允许「安装未知应用」",
-                color = AppColors.TextSecondary, fontSize = 12.sp
-            )
+            if (needsPermission) {
+                Spacer(Modifier.height(6.dp))
+                Text(
+                    "装之前要允许「安装未知应用」。点下面的按钮去开，回来还是这一步，不用重新下载。",
+                    color = AppColors.TextSecondary, fontSize = 12.sp
+                )
+                TextButton(
+                    onClick = {
+                        installError = when (val r = ApkUpdater.installApk(context, state.file)) {
+                            is ApkInstallResult.Error -> r.message
+                            else -> null
+                        }
+                    },
+                    modifier = Modifier.fillMaxWidth()
+                ) { Text("去开启权限", color = AppColors.Accent, fontSize = 13.sp) }
+            }
         }
 
         is ApkDownloadState.Failed -> {

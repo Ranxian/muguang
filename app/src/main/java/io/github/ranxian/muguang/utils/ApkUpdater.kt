@@ -93,6 +93,39 @@ object ApkUpdater {
     }
 
     /**
+     * 从下载缓存里找回「已下载待安装」。
+     *
+     * 为什么需要这一步：首次授予「安装未知应用」时，系统会立刻杀掉本进程
+     * （`REQUEST_INSTALL_PACKAGES changed`），内存里的 [state] 随之清空，
+     * 用户从设置页回来看到的又是「下载更新」，白下一遍 20MB。
+     * 包其实还在缓存里，直接认回来就行。
+     *
+     * 只认包名一致、版本比自己新的包；正在下载时不打扰。
+     */
+    fun recoverDownload(context: Context) {
+        if (isDownloading) return
+        if (state is ApkDownloadState.Done) return
+        val dir = File(context.cacheDir, "updates")
+        val candidates = dir.listFiles { f: File ->
+            f.isFile && f.name.endsWith(".apk", ignoreCase = true) && f.length() > 0
+        } ?: return
+        val newest = candidates
+            .mapNotNull { file ->
+                val info = context.packageManager
+                    .getPackageArchiveInfo(file.absolutePath, 0)
+                    ?: return@mapNotNull null
+                if (info.packageName != BuildConfig.APPLICATION_ID) return@mapNotNull null
+                val version = info.versionName ?: return@mapNotNull null
+                if (!isNewer(version, currentVersion)) return@mapNotNull null
+                file to file.lastModified()
+            }
+            .maxByOrNull { it.second }
+            ?.first
+            ?: return
+        state = ApkDownloadState.Done(newest)
+    }
+
+    /**
      * 开始下载。
      * @param fileName 保存到 cacheDir/updates/ 下的文件名，用发行版里的原始名
      * @param fallbackUrl 首选地址失败后的回落地址（镜像没同步时用原链重试一次）
@@ -325,6 +358,16 @@ object ApkUpdater {
     // ════════════════════════════════════════════
 
     /**
+     * 系统是否还缺「安装未知应用」授权。
+     *
+     * 界面拿它决定要不要显示那句提示——授权到手后还挂着提示，
+     * 用户会以为点了没生效，反复去设置里找开关。
+     */
+    fun needsInstallPermission(context: Context): Boolean =
+        Build.VERSION.SDK_INT >= Build.VERSION_CODES.O &&
+            !context.packageManager.canRequestPackageInstalls()
+
+    /**
      * 调起系统安装器。
      *
      * 三种结果都会明确返回，**不静默失败**——
@@ -340,9 +383,7 @@ object ApkUpdater {
         }
 
         // Android 8.0 起安装未知来源应用需要单独授权
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O &&
-            !context.packageManager.canRequestPackageInstalls()
-        ) {
+        if (needsInstallPermission(context)) {
             return openUnknownSourcesSettings(context)
         }
 

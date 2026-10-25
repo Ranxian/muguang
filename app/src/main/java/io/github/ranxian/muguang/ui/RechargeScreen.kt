@@ -276,7 +276,9 @@ fun RechargeScreen(
             }
         }
 
-        Spacer(Modifier.height(120.dp)) // 让底部悬浮导航栏压不到内容
+        // 充值是全屏二级页，底部胶囊导航栏在这一页是隐藏的，
+        // 按导航栏高度留白会变成一大片死空白
+        Spacer(Modifier.height(32.dp))
     }
 }
 

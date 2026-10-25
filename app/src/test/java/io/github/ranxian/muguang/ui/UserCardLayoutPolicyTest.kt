@@ -55,16 +55,29 @@ class UserCardLayoutPolicyTest {
     @Test
     fun `moving a profile card appends it to settings without duplication`() {
         val result = UserCardLayoutPolicy.moveToSettings(
-            UserCardType.ACCOUNT,
+            UserCardType.USE_CODE,
             UserCardLayoutPolicy.profileDefaults,
             UserCardLayoutPolicy.settingsDefaults
         )
 
         assertEquals(
-            listOf(UserCardType.RECHARGE, UserCardType.USE_CODE, UserCardType.BOUND_ROOM),
+            listOf(UserCardType.ACCOUNT, UserCardType.RECHARGE, UserCardType.BOUND_ROOM),
             result.profile
         )
-        assertEquals(UserCardLayoutPolicy.settingsDefaults + UserCardType.ACCOUNT, result.settings)
+        assertEquals(UserCardLayoutPolicy.settingsDefaults + UserCardType.USE_CODE, result.settings)
+    }
+
+    @Test
+    fun `pinned cards cannot be moved to the settings page`() {
+        UserCardLayoutPolicy.pinned.forEach { type ->
+            val result = UserCardLayoutPolicy.moveToSettings(
+                type,
+                UserCardLayoutPolicy.profileDefaults,
+                UserCardLayoutPolicy.settingsDefaults
+            )
+            assertEquals(UserCardLayoutPolicy.profileDefaults, result.profile)
+            assertEquals(UserCardLayoutPolicy.settingsDefaults, result.settings)
+        }
     }
 
     @Test
@@ -83,18 +96,38 @@ class UserCardLayoutPolicyTest {
     fun `restoring pages keeps cards on their selected page`() {
         val result = UserCardLayoutPolicy.restorePages(
             profileSaved = "USE_CODE,BOUND_ROOM",
-            settingsSaved = "NOTIFY,TREND,BACKGROUND,LOG,ABOUT,UPDATE,ACCOUNT"
+            settingsSaved = "NOTIFY,TREND,BACKGROUND,LOG,ABOUT,UPDATE"
         )
 
         assertEquals(
             listOf(
                 UserCardType.USE_CODE,
                 UserCardType.BOUND_ROOM,
+                UserCardType.ACCOUNT,
                 UserCardType.RECHARGE
             ),
             result.profile
         )
-        assertEquals(UserCardLayoutPolicy.settingsDefaults + UserCardType.ACCOUNT, result.settings)
+        assertEquals(UserCardLayoutPolicy.settingsDefaults, result.settings)
+    }
+
+    @Test
+    fun `account card saved on the settings page is pulled back to the profile page`() {
+        val result = UserCardLayoutPolicy.restorePages(
+            profileSaved = "USE_CODE,BOUND_ROOM,RECHARGE",
+            settingsSaved = "ACCOUNT,NOTIFY,TREND,BACKGROUND,LOG,ABOUT,UPDATE"
+        )
+
+        assertEquals(
+            listOf(
+                UserCardType.ACCOUNT,
+                UserCardType.USE_CODE,
+                UserCardType.BOUND_ROOM,
+                UserCardType.RECHARGE
+            ),
+            result.profile
+        )
+        assertEquals(UserCardLayoutPolicy.settingsDefaults, result.settings)
     }
 
     @Test
