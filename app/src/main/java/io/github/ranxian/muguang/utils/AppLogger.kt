@@ -43,8 +43,10 @@ object AppLogger {
     fun w(msg: String) = write("W", msg)
 
     fun e(msg: String, tr: Throwable? = null) {
-        val full = if (tr != null) "$msg\n${Log.getStackTraceString(tr)}" else msg
-        write("E", full)
+        // 记日志本身不能抛：e() 全在 catch 块里调用，这里再炸一次就把真正的异常盖掉了；
+        // 单元测试里 android.util.Log 是空壳，getStackTraceString 会直接抛
+        val stack = tr?.let { runCatching { Log.getStackTraceString(it) }.getOrNull() ?: it.toString() }
+        write("E", if (stack != null) "$msg\n$stack" else msg)
     }
 
     private fun write(level: String, msg: String) {

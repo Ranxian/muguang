@@ -13,9 +13,18 @@ val releaseSigningProperties = Properties().apply {
     }
 }
 val releaseSigningFields = listOf("KEYSTORE_FILE", "KEYSTORE_PASSWORD", "KEY_ALIAS", "KEY_PASSWORD")
-val releaseKeystorePath = releaseSigningProperties.getProperty("KEYSTORE_FILE")
-val releaseSigningReady = releaseSigningFields.all { !releaseSigningProperties.getProperty(it).isNullOrBlank() } &&
-    releaseKeystorePath?.let { file(it).isFile } == true
+
+/**
+ * 签名参数先看环境变量，再看 local.properties。
+ * CI（release workflow）把 jks 落地后用环境变量传进来；本地开发仍然走 local.properties，
+ * 两种来源共用同一段校验，缺一项就当没有签名配置、只出未签名的包。
+ */
+fun signingValue(key: String): String? =
+    System.getenv(key)?.takeIf { it.isNotBlank() }
+        ?: releaseSigningProperties.getProperty(key)?.takeIf { it.isNotBlank() }
+
+val releaseSigningReady = releaseSigningFields.all { signingValue(it) != null } &&
+    signingValue("KEYSTORE_FILE")?.let { file(it).isFile } == true
 
 android {
     namespace = "io.github.ranxian.muguang"
@@ -48,10 +57,10 @@ android {
 
     val releaseSigningConfig = if (releaseSigningReady) {
         signingConfigs.create("release") {
-            storeFile = file(releaseKeystorePath!!)
-            storePassword = releaseSigningProperties.getProperty("KEYSTORE_PASSWORD")
-            keyAlias = releaseSigningProperties.getProperty("KEY_ALIAS")
-            keyPassword = releaseSigningProperties.getProperty("KEY_PASSWORD")
+            storeFile = file(signingValue("KEYSTORE_FILE")!!)
+            storePassword = signingValue("KEYSTORE_PASSWORD")
+            keyAlias = signingValue("KEY_ALIAS")
+            keyPassword = signingValue("KEY_PASSWORD")
         }
     } else {
         logger.warn("未找到完整且有效的 release 签名配置，Release APK 将保持未签名；Debug 与测试任务不受影响。")
@@ -85,6 +94,11 @@ android {
     buildFeatures {
         compose = true
         buildConfig = true
+    }
+    testOptions {
+        // 单测跑在 JVM 上，android.util.Log 这类框架方法默认会抛
+        // "not mocked"；返回默认值让纯逻辑（含日志、JSON 解析）能直接测
+        unitTests.isReturnDefaultValues = true
     }
 }
 

@@ -442,7 +442,11 @@ object ApkUpdater {
     /** "v2.2.0" / "2.2.0" / "2.2.0-beta" → [2, 2, 0] */
     private fun versionNumbers(tag: String): List<Int> =
         tag.trim().trimStart('v', 'V')
-            .split('.', '-', '+')
+            // 先砍掉预发布/构建元数据：否则 "1.2.0-rc1" 会被解析成 [1,2,0,1]，
+            // 比正式版 1.2.0 = [1,2,0] 还“新”，发过 rc 就会通知所有人升级到 rc
+            .substringBefore('-')
+            .substringBefore('+')
+            .split('.')
             .mapNotNull { it.toIntOrNull() }
 
     /** 当前 App 版本，形如 "v2.2.0" */

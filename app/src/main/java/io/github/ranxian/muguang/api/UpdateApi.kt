@@ -87,6 +87,37 @@ data class UpdateRepoInfo(
 )
 
 /**
+ * GitHub Release 的 JSON →
+ * [UpdateRelease]。抽成顶层 internal 是为了能拿真实响应做单测：
+ * 解析错一个字段，用户侧表现是「明明发了新版却收不到」或「点下载 404」，
+ * 而这两件事在 CI 里没有别的办法发现。
+ */
+internal fun parseGithubRelease(json: String): UpdateRelease? =
+    try {
+        parseReleaseObject(JsonParser.parseString(json).asJsonObject)
+    } catch (e: Exception) {
+        AppLogger.e("解析 release 失败", e)
+        null
+    }
+
+private fun parseReleaseObject(o: com.google.gson.JsonObject): UpdateRelease = UpdateRelease(
+    tagName = o.get("tag_name")?.asString ?: "",
+    name = o.get("name")?.asString ?: "",
+    body = o.get("body")?.asString ?: "",
+    publishedAt = o.get("published_at")?.asString ?: "",
+    htmlUrl = o.get("html_url")?.asString ?: "",
+    prerelease = o.get("prerelease")?.asBoolean ?: false,
+    assets = o.getAsJsonArray("assets")?.mapNotNull { el ->
+        val a = el.asJsonObject
+        val url = a.get("browser_download_url")?.asString
+        val name = a.get("name")?.asString
+        // 没有下载直链的附件直接跳过——没它就没法下载
+        if (url.isNullOrEmpty() || name.isNullOrEmpty()) null
+        else UpdateAsset(name, url, a.get("size")?.asLong ?: 0L)
+    } ?: emptyList()
+)
+
+/**
  * 更新源 API 客户端（Release / 仓库信息，协议与 GitHub Release JSON 兼容）。
  *
  * [FEED_REPO] 为空时视为未配置：全部方法返回 null/空，不发起任何网络请求。
@@ -162,22 +193,7 @@ object UpdateApi {
         }
     }
 
-    private fun parseRelease(o: com.google.gson.JsonObject): UpdateRelease = UpdateRelease(
-        tagName = o.get("tag_name")?.asString ?: "",
-        name = o.get("name")?.asString ?: "",
-        body = o.get("body")?.asString ?: "",
-        publishedAt = o.get("published_at")?.asString ?: "",
-        htmlUrl = o.get("html_url")?.asString ?: "",
-        prerelease = o.get("prerelease")?.asBoolean ?: false,
-        assets = o.getAsJsonArray("assets")?.mapNotNull { el ->
-            val a = el.asJsonObject
-            val url = a.get("browser_download_url")?.asString
-            val name = a.get("name")?.asString
-            // 没有下载直链的附件直接跳过——没它就没法下载
-            if (url.isNullOrEmpty() || name.isNullOrEmpty()) null
-            else UpdateAsset(name, url, a.get("size")?.asLong ?: 0L)
-        } ?: emptyList()
-    )
+    private fun parseRelease(o: com.google.gson.JsonObject): UpdateRelease = parseReleaseObject(o)
 
     /** 仓库信息；失败返回 null */
     suspend fun fetchRepoInfo(): UpdateRepoInfo? {
