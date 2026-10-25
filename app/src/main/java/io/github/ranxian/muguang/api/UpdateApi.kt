@@ -50,7 +50,7 @@ data class UpdateRelease(
      * Gitee 镜像的下载直链。
      *
      * 不用额外发请求——两边的 tag 和附件名一致时直接拼：
-     *   https://gitee.com/<MIRROR_REPO>/releases/download/v1.2.0/muguang-v1.2.0.apk
+     *   https://gitee.com/<MIRROR_REPO>/releases/download/v1.1.0/muguang-1.1.0-arm64-v8a.apk
      *
      * ⚠️ 前提是发版时 Gitee 用了**同名 tag、同名附件**。少一个就拼不出来，
      * 下载会自动回落到 [apkAsset] 的 GitHub 地址。

@@ -58,8 +58,8 @@ git push -u gitee main
 3. 提交，然后打 tag 推送：
 
 ```bash
-git commit -am "chore: 发版 1.2.1"
-git tag v1.2.1
+git commit -am "chore: 发版 1.0.1"
+git tag v1.0.1
 git push origin main --tags
 ```
 
@@ -80,7 +80,7 @@ workflow 会依次做：单测 → 构建 release → `apksigner verify` 确认�
 
 - tag 必须带 `v` 前缀且能被 `v?\d+(\.\d+)*` 解析，否则 `ApkUpdater.isNewer` 判不出高低
 - `-rc` / `-beta` 会被 workflow 标成 pre-release；`/releases/latest` 本来就跳过预发布，
-  但 tag 名为 `v1.2.0-rc1` 时 `isNewer` 也只比到 `1.2.0`（不把 rc 当更新）
+  但 tag 名为 `v1.1.0-rc1` 时 `isNewer` 也只比到 `1.1.0`（不把 rc 当更新）
 - 版本号显示读 `BuildConfig.VERSION_NAME`，不要在任何界面写死
 
 ## 本地出包（不发布）
