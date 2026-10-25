@@ -343,6 +343,8 @@ object PrefsHelper {
     var userProfileHiddenCards: String get() = prefs.getString("userProfileHiddenCards", "") ?: ""; set(v) = prefs.edit().putString("userProfileHiddenCards", v).apply()
     var userSettingsCardOrder: String get() = prefs.getString("userSettingsCardOrder", "") ?: ""; set(v) = prefs.edit().putString("userSettingsCardOrder", v).apply()
     var userSettingsHiddenCards: String get() = prefs.getString("userSettingsHiddenCards", "") ?: ""; set(v) = prefs.edit().putString("userSettingsHiddenCards", v).apply()
+    /** 卡片布局版本：改默认顺序时 +1，老存档据此做一次性迁移 */
+    var userCardLayoutVersion: Int get() = prefs.getInt("userCardLayoutVersion", 1); set(v) = prefs.edit().putInt("userCardLayoutVersion", v).apply()
 
     // ── 自定义背景：两套独立配置（scope = home / shower），与深浅模式完全无关 ──
     fun bgGetBool(scope: String, name: String, def: Boolean) = prefs.getBoolean("bg_${scope}_$name", def)

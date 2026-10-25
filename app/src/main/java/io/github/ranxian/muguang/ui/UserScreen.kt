@@ -160,12 +160,15 @@ fun UserScreen(
             PrefsHelper.userSettingsCardOrder.isBlank() &&
             PrefsHelper.userCardOrder.isNotBlank()
     }
+    val savedLayoutVersion = remember { PrefsHelper.userCardLayoutVersion }
     val restoredPages = remember {
-        UserCardLayoutPolicy.restorePages(
+        val pages = UserCardLayoutPolicy.restorePages(
             PrefsHelper.userProfileCardOrder,
             PrefsHelper.userSettingsCardOrder,
             PrefsHelper.userCardOrder
         )
+        // 默认顺序改过（使用码沉底）时，老存档一次性对齐到新顺序
+        pages.copy(profile = UserCardLayoutPolicy.migrateProfileOrder(savedLayoutVersion, pages.profile))
     }
     var profileCardOrder by remember { mutableStateOf(restoredPages.profile) }
     var settingsCardOrder by remember { mutableStateOf(restoredPages.settings) }
@@ -194,6 +197,13 @@ fun UserScreen(
             saveCardOrder(settingsCardOrder) { PrefsHelper.userSettingsCardOrder = it }
             saveHiddenCards(profileHiddenCards) { PrefsHelper.userProfileHiddenCards = it }
             saveHiddenCards(settingsHiddenCards) { PrefsHelper.userSettingsHiddenCards = it }
+        }
+    }
+    // 卡片默认顺序变更的落盘：只在版本落后时跑一次，之后用户怎么排都不会被覆盖
+    LaunchedEffect(savedLayoutVersion) {
+        if (savedLayoutVersion < UserCardLayoutPolicy.LAYOUT_VERSION) {
+            saveCardOrder(profileCardOrder) { PrefsHelper.userProfileCardOrder = it }
+            PrefsHelper.userCardLayoutVersion = UserCardLayoutPolicy.LAYOUT_VERSION
         }
     }
     DisposableEffect(Unit) { onDispose { onSettingsVisibilityChanged(false) } }

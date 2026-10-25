@@ -16,11 +16,17 @@ internal object UserCardLayoutPolicy {
      */
     val pinned = setOf(UserCardType.ACCOUNT, UserCardType.RECHARGE)
 
+    /**
+     * 当前布局版本。改动 [profileDefaults] 的顺序时 +1，
+     * 老存档会按 [migrateProfileOrder] 做一次性迁移。
+     */
+    const val LAYOUT_VERSION = 2
+
     val profileDefaults = listOf(
         UserCardType.ACCOUNT,
         UserCardType.RECHARGE,
-        UserCardType.USE_CODE,
-        UserCardType.BOUND_ROOM
+        UserCardType.BOUND_ROOM,
+        UserCardType.USE_CODE
     )
 
     val settingsDefaults = listOf(
@@ -72,6 +78,23 @@ internal object UserCardLayoutPolicy {
             }
         }
         return CardPages(profile, settings)
+    }
+
+    /**
+     * 布局版本迁移：把「我的」页恢复成当前默认顺序。
+     *
+     * 只在 [version] 落后于 [LAYOUT_VERSION] 时执行一次。明确不做「只迁没动过的存档」——
+     * 判断标准太脆（老版本会往存档里补卡片，存档本来就和新默认不一样），
+     * 宁可让用户重排一次，也不能让「使用码应该在最下面」这种约定失效。
+     * 从设置页搬进「我的」的卡片保留，跟在默认顺序后面。
+     */
+    fun migrateProfileOrder(
+        version: Int,
+        profile: List<UserCardType>
+    ): List<UserCardType> {
+        if (version >= LAYOUT_VERSION) return profile
+        val extras = profile.filter { it !in profileDefaults }
+        return profileDefaults + extras
     }
 
     /** 钉住的卡片（见 [pinned]）不参与搬家：原样返回 */

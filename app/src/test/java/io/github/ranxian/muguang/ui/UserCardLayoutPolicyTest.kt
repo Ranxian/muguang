@@ -10,8 +10,8 @@ class UserCardLayoutPolicyTest {
             listOf(
                 UserCardType.ACCOUNT,
                 UserCardType.RECHARGE,
-                UserCardType.USE_CODE,
-                UserCardType.BOUND_ROOM
+                UserCardType.BOUND_ROOM,
+                UserCardType.USE_CODE
             ),
             UserCardLayoutPolicy.profileDefaults
         )
@@ -150,6 +150,52 @@ class UserCardLayoutPolicyTest {
         assertEquals(
             listOf(UserCardType.LOG, UserCardType.NOTIFY, UserCardType.BACKGROUND, UserCardType.UPDATE, UserCardType.ABOUT, UserCardType.TREND),
             result.settings
+        )
+    }
+
+    @Test
+    fun `old layout is migrated to the new default order once`() {
+        val legacy = listOf(
+            UserCardType.USE_CODE,
+            UserCardType.BOUND_ROOM,
+            UserCardType.ACCOUNT,
+            UserCardType.RECHARGE
+        )
+
+        assertEquals(
+            UserCardLayoutPolicy.profileDefaults,
+            UserCardLayoutPolicy.migrateProfileOrder(1, legacy)
+        )
+    }
+
+    @Test
+    fun `cards moved in from the settings page stay after the defaults`() {
+        val legacy = listOf(
+            UserCardType.USE_CODE,
+            UserCardType.NOTIFY,
+            UserCardType.ACCOUNT,
+            UserCardType.BOUND_ROOM,
+            UserCardType.RECHARGE
+        )
+
+        assertEquals(
+            UserCardLayoutPolicy.profileDefaults + UserCardType.NOTIFY,
+            UserCardLayoutPolicy.migrateProfileOrder(1, legacy)
+        )
+    }
+
+    @Test
+    fun `current layout version never rewrites the user's order`() {
+        val custom = listOf(
+            UserCardType.BOUND_ROOM,
+            UserCardType.USE_CODE,
+            UserCardType.ACCOUNT,
+            UserCardType.RECHARGE
+        )
+
+        assertEquals(
+            custom,
+            UserCardLayoutPolicy.migrateProfileOrder(UserCardLayoutPolicy.LAYOUT_VERSION, custom)
         )
     }
 }
