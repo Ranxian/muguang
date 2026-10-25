@@ -49,6 +49,8 @@ import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonColors
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Icon
+import androidx.compose.ui.res.painterResource
+import io.github.ranxian.muguang.R
 import androidx.compose.material3.Text
 import androidx.compose.animation.core.CubicBezierEasing
 import androidx.compose.animation.core.tween
@@ -439,6 +441,10 @@ fun CubeSpinner(
  * 日夜分段开关（nasty-moth-15 结构改绘，主题化配色）：
  * 底/描边/图标全部取当前风格令牌，与设置页卡片同材质；
  * 滑块 = 强调色，暗态叠加顶部微光。切换走圆形揭示（真实生效）。
+ *
+ * 图标用矢量（ic_sun / ic_moon）而非 emoji：emoji 各厂商字形歪斜、自带颜色，
+ * 压不住令牌。两侧淡显对侧图标（= 点了会去到的模式），
+ * 滑块上带当前模式的图标，「现在是什么、点了去哪」一眼都有。
  */
 @Composable
 fun DayNightToggle(
@@ -475,8 +481,24 @@ fun DayNightToggle(
                 .padding(3.dp)
         ) {
             Row(Modifier.fillMaxSize(), horizontalArrangement = Arrangement.SpaceBetween) {
-                Box(Modifier.weight(1f), contentAlignment = Alignment.Center) { Text("☀️", fontSize = 12.sp) }
-                Box(Modifier.weight(1f), contentAlignment = Alignment.Center) { Text("🌙", fontSize = 12.sp) }
+                // 两侧淡显的矢量图标（Material Symbols 改绘，可被令牌 tint）：
+                // 之前用 emoji，各厂商字形歪斜还自带颜色，压不住风格令牌
+                Box(Modifier.weight(1f), contentAlignment = Alignment.Center) {
+                    Icon(
+                        painterResource(R.drawable.ic_sun),
+                        contentDescription = null,
+                        modifier = Modifier.size(13.dp),
+                        tint = p.inkSubtle,
+                    )
+                }
+                Box(Modifier.weight(1f), contentAlignment = Alignment.Center) {
+                    Icon(
+                        painterResource(R.drawable.ic_moon),
+                        contentDescription = null,
+                        modifier = Modifier.size(13.dp),
+                        tint = p.inkSubtle,
+                    )
+                }
             }
             Box(
                 Modifier
@@ -489,8 +511,18 @@ fun DayNightToggle(
                             0.7f to p.accent,
                             1f to p.accent.copy(alpha = 0.92f)
                         )
-                    )
-            )
+                    ),
+                contentAlignment = Alignment.Center
+            ) {
+                // 滑块上带当前模式的图标：accent 底压 canvas 色，四风格 × 日夜都有对比；
+                // 「现在是什么」看滑块，「点了去哪」看另一侧淡显图标
+                Icon(
+                    painterResource(if (isDark) R.drawable.ic_moon else R.drawable.ic_sun),
+                    contentDescription = if (isDark) "当前深色模式" else "当前浅色模式",
+                    modifier = Modifier.size(14.dp),
+                    tint = p.canvas,
+                )
+            }
         }
     }
 }
