@@ -149,3 +149,9 @@ jobs:
           curl -sS -X POST \
             "$BASE/$REL_ID/attach_files?access_token=$GITEE_TOKEN" \
             -F "file=@${{ steps.stage.outputs.name }}"
+
+          # 校验文件也要传：只传 APK 的话，镜像页上点 .sha256 是 404，
+          # 附件集和 GitHub 那边对不上。
+          curl -sS -X POST \
+            "$BASE/$REL_ID/attach_files?access_token=$GITEE_TOKEN" \
+            -F "file=@${{ steps.stage.outputs.name }}.sha256"
