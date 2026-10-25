@@ -6,6 +6,7 @@ import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.spring
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.BorderStroke
+import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.*
@@ -21,6 +22,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.scale
+import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.luminance
 import androidx.compose.ui.graphics.painter.Painter
@@ -61,10 +63,34 @@ fun FloatingPillNavBar(
     Box(
         modifier = modifier
             .fillMaxWidth()
-            .navigationBarsPadding()
-            .padding(bottom = 22.dp, start = 24.dp, end = 24.dp),
-        contentAlignment = Alignment.Center
+            .navigationBarsPadding(),
+        contentAlignment = Alignment.BottomCenter
     ) {
+        // ── 液态毛玻璃底座 ──
+        // 胶囊原来直接浮在照片上，底栏那一整条露的就是原图；抽屉收起后悬浮把手
+        // 又单独飘在图上也显得突兀。底座把这一条统一压成玻璃面：上沿略透
+        // （透出底色一点点色相，像磨过），往下收成接近实色 ——
+        // 抽屉被拖到半开、内部行经过这里时也不会透出来。
+        Box(
+            Modifier
+                .fillMaxWidth()
+                .height(84.dp)
+                .background(
+                    Brush.verticalGradient(
+                        0f to p.surface.copy(alpha = if (isDark) 0.86f else 0.90f),
+                        0.5f to p.surface.copy(alpha = if (isDark) 0.93f else 0.95f),
+                        1f to p.surface.copy(alpha = if (isDark) 0.97f else 0.98f)
+                    )
+                )
+        ) {
+            // 上沿发丝线：没有它整条玻璃面会和上面的内容糊成一片
+            Box(
+                Modifier
+                    .fillMaxWidth()
+                    .height(1.dp)
+                    .background(p.hairline)
+            )
+        }
         Surface(
             shape = pillShape,
             // 深色下留一点透明度，让页面底色透上来；浅色下用实色纸面，
@@ -73,7 +99,9 @@ fun FloatingPillNavBar(
             border = if (sf.bordered) BorderStroke(1.dp, p.hairline) else null,
             shadowElevation = if (sf.shadow > 0.dp) 8.dp else 0.dp,
             tonalElevation = 0.dp,
-            modifier = Modifier.width(260.dp)
+            modifier = Modifier
+                .padding(bottom = 22.dp, start = 24.dp, end = 24.dp)
+                .width(260.dp)
         ) {
             BoxWithConstraints(modifier = Modifier.fillMaxWidth().padding(4.dp)) {
                 val itemWidth = maxWidth / 3

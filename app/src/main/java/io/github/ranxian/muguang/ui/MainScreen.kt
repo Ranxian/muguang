@@ -780,7 +780,10 @@ private fun P1HomeDrawer(
     val sheetIcon = Color(0xFF0071E3)         // 图标 3.84:1（图形 ≥3:1）
     // 收起深度 = sheet 实测高度 − 把手高度：收起只露把手，内部内容不可见
     val scope = rememberCoroutineScope()
-    var dragged = false
+    // 必须是 State：抽屉拖动时 offsetPx 每帧变化 → 每帧重组，
+    // 普通局部变量会在重组时重新初始化成 false，onDragStopped 就永远认为
+    // 「没拖动过」而不吸附，松手后停在半开位置（实测停在 110dp）
+    var dragged by remember { mutableStateOf(false) }
     // 抽屉从「收」跨到「开」时 +1：驱动雷达自动转三圈并触发一次真实扫描
     var openCount by remember { mutableStateOf(0) }
     var wasOpen by remember { mutableStateOf(false) }
@@ -832,12 +835,6 @@ private fun P1HomeDrawer(
                 .graphicsLayer { translationY = offsetPx }
                 // 四角同半径：底部不再贴边，下方要露出胶囊，做成悬浮面板才不会像被切掉
                 .clip(RoundedCornerShape(26.dp))
-                // 必须是实色：半透明白（试过 0.80 / 0.96）会透出主页的余额卡，
-                // 拉开抽屉时「¥52.30」「已筛选…」和自己的行叠在一起，两套字互相干扰。
-                // 玻璃感由身后 32% 的黑遮罩提供，面板本身按 iOS 的实心 sheet 处理
-                .background(Color.White)
-                // 内容离面板底沿留 16dp，最后一行不贴边
-                .padding(bottom = 16.dp)
                 .draggable(
                     orientation = Orientation.Vertical,
                     state = rememberDraggableState { delta ->
@@ -851,10 +848,18 @@ private fun P1HomeDrawer(
                     }
                 )
         ) {
+            // 把手与底部玻璃底座同一材质：收起时它是唯一露出来的部分，
+            // 纯白一块浮在照片上很突兀。但一旦拉开就不能再透 —— 32% 的遮罩压不住
+            // 主页的「¥52.30」，半透明把手会把那行字映出来（实测可见）。
+            // 所以透明度只在贴近收起阈值时才生效，6 次方让它很快收敛回实心白。
+            val closedness =
+                if (collapsedOffset > 0f) (offsetPx / collapsedOffset).coerceIn(0f, 1f) else 0f
+            val handleAlpha = 1f - 0.16f * Math.pow(closedness.toDouble(), 6.0).toFloat()
             Box(
                 Modifier
                     .fillMaxWidth()
                     .height(handleH)
+                    .background(Color.White.copy(alpha = handleAlpha))
                     .clickable { if (!dragged) animateTo(if (isOpen) collapsedOffset else 0f) },
                 contentAlignment = Alignment.Center
             ) {
@@ -870,6 +875,13 @@ private fun P1HomeDrawer(
             Column(
                 Modifier
                     .fillMaxWidth()
+                    // weight 撑满把手以下的全部高度：verticalScroll 的容器高度是
+                    // 跟着内容走的，内容不满时不会占满，白底就盖不到抽屉底部，
+                    // 会从面板下沿漏出一条照片（180px 左右）
+                    .weight(1f)
+                    // 实色只留给内容区：半透明白（试过 0.80 / 0.96）拉开时会透出
+                    // 主页余额卡，「¥52.30」「已筛选…」和自己的行叠在一起，两套字互相干扰
+                    .background(Color.White)
                     .verticalScroll(rememberScrollState())
             ) {
                 // 探测行：雷达 + 「探测」标题左对齐一行；展开抽屉自动转三圈并触发扫描
@@ -1041,9 +1053,9 @@ private fun P1HomeDrawer(
                         }
                     }
                 }
-                // 底部呼吸位：84dp 的胶囊让位已经由外层裁切窗口处理，
-                // 这里再垫一大截会在可滚动后变成一屏空白
-                Spacer(Modifier.height(12.dp))
+                // 底部呼吸位：84dp 的胶囊让位由外层裁切窗口处理，
+                // 这里留一点就够，留多了会在可滚动后变成一屏空白
+                Spacer(Modifier.height(20.dp))
             }
         }
         }
