@@ -100,6 +100,7 @@ jobs:
               CHANGELOG.md
             echo
             echo "> 更新检查走 GitHub Releases；应用内下载优先走 Gitee 镜像，失败自动回落到本页附件。"
+            echo "> 官方售后群（QQ）：1126843866「沐光事业部」，装不上、用不对都进群说。"
           } > release-notes.md
           echo "name=$OUT" >> "$GITHUB_OUTPUT"
           echo "version=$VERSION" >> "$GITHUB_OUTPUT"
