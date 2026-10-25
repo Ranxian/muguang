@@ -138,7 +138,10 @@ io.github.ranxian.muguang.ui.theme.CircularRevealThemeHost(
         // 假数据只用来演示 UI：冻结绑定刷新，免得假 SN 的失败请求
         // 把「剩余 21:35」翻成「未能获取设备状态」
         vm.previewFreezeBoundRefresh = true
-        if (!PrefsHelper.isLoggedIn) fillFakeState(vm)
+        // --ei washers 0/1/2：灌几台绑定洗衣机，验收未绑定/单机/双机三档形态
+        if (!PrefsHelper.isLoggedIn) {
+            fillFakeState(vm, intent.getIntExtra("washers", 2).coerceIn(0, 2))
+        }
         var tab by remember { mutableIntStateOf(startTab) }
         Box(Modifier.fillMaxSize()) {
             // 必须与正式版一致：MainActivity 里 MainScreen 是满屏、胶囊浮在上面。
@@ -195,7 +198,11 @@ io.github.ranxian.muguang.ui.theme.CircularRevealThemeHost(
         )
     }
 
-    private fun fillFakeState(vm: MainViewModel) {
+    /**
+     * @param washers 灌几台绑定洗衣机（0/1/2）——用 `--ei washers n` 切换，
+     * 三档（未绑定 / 单机 / 双机）的首页卡片和抽屉分区形态都能单独验收
+     */
+    private fun fillFakeState(vm: MainViewModel, washers: Int) {
         // ⚠️ 仅在未登录时调用（调用方已守卫）
         vm.phone = "13800000000"
         // 双机绑定形态：一台在跑（倒计时）、一台空闲，
@@ -207,30 +214,38 @@ io.github.ranxian.muguang.ui.theme.CircularRevealThemeHost(
             macAddress = "AA:BB:CC:DD:EE:02",
         )
         val now = System.currentTimeMillis()
-        vm.previewSetBoundWashers(
-            devices = listOf(washerA, washerB),
-            views = mapOf(
-                washerA.snCode to BoundWasherView(
-                    statusLabel = "使用中",
-                    stageText = "脱水",
-                    remainingSec = 21 * 60 + 42,
-                    isActive = true,
-                    isOwner = true,
-                    known = true,
-                ),
-                washerB.snCode to BoundWasherView(
-                    statusLabel = "他人使用中",
-                    stageText = "洗涤",
-                    remainingSec = 18 * 60,
-                    isActive = true,
-                    isOwner = false,
-                    known = true,
-                    remainingIsEstimate = true,
-                    orderPlacedAtMs = now - 6 * 60_000L,
-                ),
-            ),
-            updatedAtMs = mapOf(washerA.snCode to now, washerB.snCode to now)
+        val activeView = BoundWasherView(
+            statusLabel = "使用中",
+            stageText = "脱水",
+            remainingSec = 21 * 60 + 42,
+            isActive = true,
+            isOwner = true,
+            known = true,
         )
+        val othersView = BoundWasherView(
+            statusLabel = "他人使用中",
+            stageText = "洗涤",
+            remainingSec = 18 * 60,
+            isActive = true,
+            isOwner = false,
+            known = true,
+            remainingIsEstimate = true,
+            orderPlacedAtMs = now - 6 * 60_000L,
+        )
+        // 0 → 空（卡片整张不渲染）；1 → 只有在跑那台；2 → 双机
+        when (washers) {
+            0 -> vm.previewSetBoundWashers(emptyList(), emptyMap(), emptyMap())
+            1 -> vm.previewSetBoundWashers(
+                listOf(washerA),
+                mapOf(washerA.snCode to activeView),
+                mapOf(washerA.snCode to now)
+            )
+            else -> vm.previewSetBoundWashers(
+                listOf(washerA, washerB),
+                mapOf(washerA.snCode to activeView, washerB.snCode to othersView),
+                mapOf(washerA.snCode to now, washerB.snCode to now)
+            )
+        }
         // 附近设备列表：名字必须能通过寝室筛选（matchesBoundRoom），否则全被滤掉
         vm.nearbyDevices.addAll(
             listOf(
