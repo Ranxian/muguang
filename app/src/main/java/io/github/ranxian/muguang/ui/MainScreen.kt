@@ -761,6 +761,13 @@ private fun P1HomeDrawer(
     // 约束未稳定时会偏小，导致「收起」只移了一半，抽屉内容露在导航栏后面。
     val drawerH = 440.dp
     val handleH = 52.dp
+    // 收起后的把手必须浮在底部导航胶囊之上，否则根本抓不住：
+    // 胶囊是 fillMaxWidth + navigationBarsPadding()（MainActivity 已隐藏系统三键，实测为 0）
+    // + padding(bottom = 22.dp)，内部 42dp 滑块加 8dp 内边距 = 50dp 高，
+    // 也就是它占住屏幕底部 22…72dp 这一段 —— 正好压在 0…52dp 的把手上，
+    // 连 38×5dp 的抓握条都被遮住了。抬 84dp（胶囊顶端 72 + 12 间隙）后
+    // 把手落在 84…136dp，胶囊完整露在下方。
+    val navLift = 84.dp
     val collapsedOffset = with(LocalDensity.current) { (drawerH - handleH).toPx() }
     var offsetPx by remember(collapsedOffset) { mutableFloatStateOf(collapsedOffset) }
     // sheet 是白 80% 叠在照片 + 32% 黑遮罩上，最浅会到 #E8E8EA 附近。
@@ -808,19 +815,28 @@ private fun P1HomeDrawer(
                     ) { animateTo(collapsedOffset) }
             )
         }
+        // 给底部胶囊让位的裁切窗口：sheet 只能出现在 u ≥ 84dp 的区域。
+        // 只把面板整体上浮还不够——面板下沿低于让位线时，那一截仍会露出内部行；
+        // 裁掉之后收起态就只剩把手上沿，正好停在胶囊上方 12dp。
+        Box(
+            Modifier
+                .fillMaxSize()
+                .padding(bottom = navLift)
+                .clipToBounds()
+        ) {
         Column(
             Modifier
                 .fillMaxWidth()
                 .height(drawerH)
                 .align(Alignment.BottomCenter)
                 .graphicsLayer { translationY = offsetPx }
-                .clip(RoundedCornerShape(topStart = 26.dp, topEnd = 26.dp))
+                // 四角同半径：底部不再贴边，下方要露出胶囊，做成悬浮面板才不会像被切掉
+                .clip(RoundedCornerShape(26.dp))
                 // 必须是实色：半透明白（试过 0.80 / 0.96）会透出主页的余额卡，
                 // 拉开抽屉时「¥52.30」「已筛选…」和自己的行叠在一起，两套字互相干扰。
                 // 玻璃感由身后 32% 的黑遮罩提供，面板本身按 iOS 的实心 sheet 处理
                 .background(Color.White)
-                // 只留 16dp 收边：悬浮导航胶囊画在 MainScreen 之外（更下面那条系统栏里），
-                // 不会压到抽屉，之前按 88dp 给它让位，白留了一条空白带
+                // 内容离面板底沿留 16dp，最后一行不贴边
                 .padding(bottom = 16.dp)
                 .draggable(
                     orientation = Orientation.Vertical,
@@ -1025,10 +1041,11 @@ private fun P1HomeDrawer(
                         }
                     }
                 }
-                // 底部留一点呼吸位即可：sheet 自身已有 88dp 底距留给悬浮导航，
-                // 这里再垫 88dp 会在可滚动后变成一屏空白
+                // 底部呼吸位：84dp 的胶囊让位已经由外层裁切窗口处理，
+                // 这里再垫一大截会在可滚动后变成一屏空白
                 Spacer(Modifier.height(12.dp))
             }
+        }
         }
     }
 }

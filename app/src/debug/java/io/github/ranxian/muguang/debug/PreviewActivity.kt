@@ -138,7 +138,10 @@ io.github.ranxian.muguang.ui.theme.CircularRevealThemeHost(
         if (!PrefsHelper.isLoggedIn) fillFakeState(vm)
         var tab by remember { mutableIntStateOf(startTab) }
         Box(Modifier.fillMaxSize()) {
-            Box(Modifier.fillMaxSize().padding(bottom = 92.dp)) {
+            // 必须与正式版一致：MainActivity 里 MainScreen 是满屏、胶囊浮在上面。
+            // 之前这里给 MainScreen 让了 92dp，预览截图里抽屉把手的位置就比真机高一大截，
+            // 拿它验收「把手会不会被胶囊压住」会得出相反结论。
+            Box(Modifier.fillMaxSize()) {
                 when (tab) {
                     0 -> MainScreen(phone = vm.phone, viewModel = vm)
                     1 -> WalletScreen(viewModel = vm)
