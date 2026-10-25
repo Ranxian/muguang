@@ -15,9 +15,14 @@ securityCrypto = "1.1.0-alpha06"
 camera = "1.4.2"
 mlkitBarcode = "17.3.0"
 
+# 支付宝客户端 SDK：充值走「服务端下单 → 本地 PayTask 拉起支付宝」，
+# 和官方 App 同一条链路（官方 ek.b 用的就是它）。纯 Java，不带 so。
+alipaySdk = "15.8.42"
+
 mqtt = "1.1.1"
 
 [libraries]
+alipay-sdk = { group = "com.alipay.sdk", name = "alipaysdk-android", version.ref = "alipaySdk" }
 mqtt-paho = { group = "org.eclipse.paho", name = "org.eclipse.paho.client.mqttv3", version = "1.2.5" }
 mqtt-android = { group = "org.eclipse.paho", name = "org.eclipse.paho.android.service", version.ref = "mqtt" }
 androidx-core-ktx = { group = "androidx.core", name = "core-ktx", version.ref = "coreKtx" }

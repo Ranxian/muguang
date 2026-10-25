@@ -70,13 +70,16 @@ import io.github.ranxian.muguang.model.DeviceInfo
 import io.github.ranxian.muguang.model.UseCodeData
 import io.github.ranxian.muguang.ui.design.DayNightToggle
 import io.github.ranxian.muguang.ui.design.Design
+import io.github.ranxian.muguang.ui.design.PressButton
 import io.github.ranxian.muguang.ui.theme.AppColors
 import io.github.ranxian.muguang.ui.theme.LocalThemeMode
 import io.github.ranxian.muguang.ui.theme.LocalThemeReveal
 import io.github.ranxian.muguang.ui.theme.ThemeMode
+import io.github.ranxian.muguang.ui.theme.inkOnFill
 import io.github.ranxian.muguang.utils.ApkDownloadState
 import io.github.ranxian.muguang.utils.ApkInstallResult
 import io.github.ranxian.muguang.utils.ApkUpdater
+import io.github.ranxian.muguang.utils.MoneyFormat
 import io.github.ranxian.muguang.utils.PrefsHelper
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
@@ -84,6 +87,7 @@ import kotlinx.coroutines.launch
 /** 「我的」页面中可编辑的卡片类型（声明顺序即默认顺序） */
 enum class UserCardType(val title: String) {
     ACCOUNT("账号信息"),
+    RECHARGE("充值"),
     USE_CODE("使用码"),
     NOTIFY("通知"),
     TREND("消费趋势"),
@@ -144,6 +148,7 @@ fun UserScreen(
     val useCode = viewModel?.useCodeData
 
     var showSettings by remember { mutableStateOf(false) }
+    var showRecharge by remember { mutableStateOf(false) }
     var showBackgroundScreen by remember { mutableStateOf(false) }
     var showLogViewer by remember { mutableStateOf(false) }
     var editMode by remember { mutableStateOf(false) }
@@ -176,7 +181,10 @@ fun UserScreen(
     val themeReveal = LocalThemeReveal.current
     var themeBtnPos by remember { mutableStateOf(Offset.Zero) }
 
-    LaunchedEffect(showSettings) { onSettingsVisibilityChanged(showSettings) }
+    LaunchedEffect(showSettings, showRecharge) {
+        // 充值页也是全屏二级页：底部胶囊导航栏让位，否则会压住确认按钮
+        onSettingsVisibilityChanged(showSettings || showRecharge)
+    }
     LaunchedEffect(migrateLegacyLayout) {
         if (migrateLegacyLayout) {
             saveCardOrder(profileCardOrder) { PrefsHelper.userProfileCardOrder = it }
@@ -186,6 +194,11 @@ fun UserScreen(
         }
     }
     DisposableEffect(Unit) { onDispose { onSettingsVisibilityChanged(false) } }
+
+    if (showRecharge) {
+        RechargeScreen(mainViewModel = viewModel, onBack = { showRecharge = false })
+        return
+    }
 
     if (showSettings) {
         SettingsScreen(
@@ -215,6 +228,7 @@ fun UserScreen(
             },
             onShowBackground = { showBackgroundScreen = true },
             onShowLog = { showLogViewer = true },
+            onShowRecharge = { showRecharge = true },
             onBack = { showSettings = false },
             onLogout = onLogout
         )
@@ -291,7 +305,10 @@ fun UserScreen(
                     saveHiddenCards(settingsHiddenCards) { PrefsHelper.userSettingsHiddenCards = it }
                 }
             ) {
-                UserCardContent(type, phone, useCode, viewModel, { showBackgroundScreen = true }, { showLogViewer = true })
+                UserCardContent(
+                    type, phone, useCode, viewModel,
+                    { showBackgroundScreen = true }, { showLogViewer = true }, { showRecharge = true }
+                )
             }
             Spacer(Modifier.height(16.dp))
         }
@@ -362,6 +379,7 @@ private fun SettingsScreen(
     onMoveToProfile: (UserCardType) -> Unit,
     onShowBackground: () -> Unit,
     onShowLog: () -> Unit,
+    onShowRecharge: () -> Unit,
     onBack: () -> Unit,
     onLogout: () -> Unit
 ) {
@@ -405,7 +423,7 @@ private fun SettingsScreen(
                 moveToOtherPageDescription = "移到我的页面",
                 onMoveToOtherPage = { onMoveToProfile(type) }
             ) {
-                UserCardContent(type, phone, useCode, viewModel, onShowBackground, onShowLog)
+                UserCardContent(type, phone, useCode, viewModel, onShowBackground, onShowLog, onShowRecharge)
             }
             Spacer(Modifier.height(16.dp))
         }
@@ -428,10 +446,12 @@ private fun UserCardContent(
     useCode: UseCodeData?,
     viewModel: MainViewModel?,
     onShowBackground: () -> Unit,
-    onShowLog: () -> Unit
+    onShowLog: () -> Unit,
+    onShowRecharge: () -> Unit
 ) {
     when (type) {
         UserCardType.ACCOUNT -> AccountCard(phone, viewModel)
+        UserCardType.RECHARGE -> RechargeCard(viewModel, onShowRecharge)
         UserCardType.USE_CODE -> UseCodeCard(useCode, viewModel)
         UserCardType.BOUND_ROOM -> BoundRoomCard(viewModel)
         UserCardType.NOTIFY -> NotifyCard()
@@ -509,6 +529,57 @@ private fun EditableCardSlot(
         // 隐藏状态下，编辑模式中卡片半透明显示
         Box(modifier = if (editMode && isHidden) Modifier.alpha(0.45f) else Modifier) {
             content()
+        }
+    }
+}
+
+/**
+ * 充值入口。
+ *
+ * 放「我的」而不是钱包页：钱包页是账单台账，充值属于「账户」操作；
+ * 而且这张卡片在「我的」里可排序、可隐藏，用户想把它提到第一位也行。
+ *
+ * 金额**不在本卡片里编辑**，只显示服务端给的余额——充值页才有套餐可选。
+ */
+@Composable
+private fun RechargeCard(viewModel: MainViewModel?, onOpen: () -> Unit) {
+    val balance = viewModel?.walletBalance
+    BaseCard {
+        Row(
+            modifier = Modifier.fillMaxWidth().padding(20.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Column(Modifier.weight(1f)) {
+                Text(
+                    "账户充值",
+                    fontSize = 16.sp,
+                    fontWeight = FontWeight.Bold,
+                    color = AppColors.TextPrimary
+                )
+                Spacer(Modifier.height(4.dp))
+                Text(
+                    balance?.let { "钱包余额 ¥${MoneyFormat.format(it)}" }
+                        ?: "用支付宝给趣智校园账户充值",
+                    fontSize = 13.sp,
+                    color = AppColors.TextSecondary
+                )
+            }
+            Spacer(Modifier.width(12.dp))
+            PressButton(
+                onClick = onOpen,
+                shape = RoundedCornerShape(12.dp),
+                contentPadding = PaddingValues(horizontal = 16.dp, vertical = 8.dp),
+                // 13sp + 上下 8dp 只有 ~34dp 高，手指按不准；补到 44dp
+                modifier = Modifier.heightIn(min = 44.dp),
+                colors = ButtonDefaults.buttonColors(containerColor = AppColors.Accent)
+            ) {
+                Text(
+                    "去充值",
+                    fontSize = 13.sp,
+                    // 强调色会被「自定义背景提取的主题色」覆盖，字色现场按对比度挑
+                    color = inkOnFill(AppColors.Accent, Design.palette.accentInk)
+                )
+            }
         }
     }
 }

@@ -150,6 +150,40 @@ interface QzxyService {
     @GET("/settlement/campus/userInfo")
     fun getCampusUserInfo(): Call<ResponseBody>
 
+    // ── 充值 ──
+    //
+    // 三个接口都走 v3 API（官方 `gj.h` 里 `MyApp.e == true` 的那一支）。
+    // 前两个是 GET，认证参数由 NetworkModule 的拦截器自动补；下单是 POST，
+    // 官方基类 `t0()` 是**手动**把这些字段并进请求体的，所以这里也手动传。
+
+    /** 本校开通的充值通道，`data.payWay` 是通道编号列表 */
+    @GET("/settlement/recharge/pay/mode")
+    fun getRechargePayModes(): Call<ResponseBody>
+
+    /** 充值套餐。官方页面只有套餐选择，没有自定义金额输入 */
+    @GET("/settlement/recharge/package/list")
+    fun getRechargePackages(): Call<ResponseBody>
+
+    /**
+     * 支付宝下单（`payWay=2`）。
+     *
+     * 返回的 `data` 是**支付宝 orderInfo 原文**，交给 `PayTask.payV2` 拉起支付。
+     * `signature` 由 [io.github.ranxian.muguang.data.RechargeSigner] 计算。
+     */
+    @FormUrlEncoded
+    @POST("/settlement/alipay/recharge/balance")
+    fun alipayRecharge(@FieldMap body: Map<String, String>): Call<ResponseBody>
+
+    /** 聚合支付下单（`payWay=26`），`data.cashierUrl` 是收银台地址 */
+    @FormUrlEncoded
+    @POST("/settlement/juhe/recharge/balance")
+    fun juheRecharge(@FieldMap body: Map<String, String>): Call<ResponseBody>
+
+    /** 校园卡充值（`payWay=36`），`data.campusRechargeUrl` 是校园卡充值页 */
+    @FormUrlEncoded
+    @POST("/settlement/campus/jump/address")
+    fun campusRecharge(@FieldMap body: Map<String, String>): Call<ResponseBody>
+
     /**
      * 更换手机号。
      *

@@ -8,6 +8,7 @@ internal object UserCardLayoutPolicy {
 
     val profileDefaults = listOf(
         UserCardType.ACCOUNT,
+        UserCardType.RECHARGE,
         UserCardType.USE_CODE,
         UserCardType.BOUND_ROOM
     )

@@ -97,4 +97,42 @@ class UpdateApiParseTest {
         assertNull(parseGithubRelease("{not json"))
         assertNull(parseGithubRelease("[]"))
     }
+
+    /**
+     * 线上真实响应的完整快照：v1.2.0 发布后从
+     * `GET /repos/Ranxian/muguang/releases/latest` 原样抓下来的。
+     *
+     * 上面那份是手写的结构样例，这份带了几十个真实字段
+     * （author / uploader / reactions / assets[].digest …）。解析器只要在真响应上
+     * 挑错附件或拼错镜像链，用户侧就是「点下载 404」。
+     */
+    private fun realReleaseJson(): String =
+        checkNotNull(javaClass.classLoader?.getResourceAsStream("github-release-v1.2.0.json")) {
+            "缺少测试资源 github-release-v1.2.0.json"
+        }.bufferedReader().use { it.readText() }
+
+    @Test
+    fun `线上真实响应能挑出安装包并拼出镜像链`() {
+        val r = parseGithubRelease(realReleaseJson())!!
+        assertEquals("v1.2.0", r.tagName)
+        assertFalse(r.prerelease)
+        assertEquals("muguang-1.2.0-arm64-v8a.apk", r.apkAsset?.name)
+        assertEquals(19543058L, r.apkAsset?.sizeBytes)
+        assertEquals(
+            "https://gitee.com/Ranxian/muguang/releases/download/v1.2.0/muguang-1.2.0-arm64-v8a.apk",
+            r.directApkUrl
+        )
+        assertEquals(
+            "https://github.com/Ranxian/muguang/releases/download/v1.2.0/muguang-1.2.0-arm64-v8a.apk",
+            r.originApkUrl
+        )
+    }
+
+    @Test
+    fun `刚发布的这一版对 1_2_0 用户不算新`() {
+        // 装上 v1.2.0 之后点「检查更新」必须看到「已是最新」；
+        // 这条把真实 tag 和包内 versionName 对上了，发版后才不会自己提示自己
+        val r = parseGithubRelease(realReleaseJson())!!
+        assertFalse(io.github.ranxian.muguang.utils.ApkUpdater.isNewer(r.tagName, "1.2.0"))
+    }
 }

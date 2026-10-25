@@ -34,8 +34,8 @@ android {
         applicationId = "io.github.ranxian.muguang"
         minSdk = 26
         targetSdk = 36
-        versionCode = 3
-        versionName = "1.2.0"
+        versionCode = 4
+        versionName = "1.2.1"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
         vectorDrawables {
@@ -140,6 +140,10 @@ dependencies {
     implementation(libs.camera.lifecycle)
     implementation(libs.camera.view)
     implementation(libs.mlkit.barcode)
+
+    // 支付宝收银台（充值）。AAR 自带 H5PayActivity / PayResultActivity 等清单声明，
+    // 合并即用；纯 Java，无 so，对 abiFilters 没影响。
+    implementation(libs.alipay.sdk)
 
     testImplementation(libs.junit)
     androidTestImplementation(libs.androidx.junit)

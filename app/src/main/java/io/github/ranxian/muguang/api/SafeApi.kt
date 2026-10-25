@@ -18,12 +18,17 @@ import io.github.ranxian.muguang.model.OrderLastBean
 import io.github.ranxian.muguang.model.OrderStatus
 import io.github.ranxian.muguang.model.ProjectInfo
 import io.github.ranxian.muguang.model.ProjectSwitchData
+import io.github.ranxian.muguang.model.RechargePackage
+import io.github.ranxian.muguang.model.RechargePayModes
 import io.github.ranxian.muguang.model.UnpaidBill
 import io.github.ranxian.muguang.model.UseCodeData
 import io.github.ranxian.muguang.model.WalletData
 import io.github.ranxian.muguang.model.WasherMode
 import io.github.ranxian.muguang.model.WasherStartData
 import io.github.ranxian.muguang.model.WasherStatus
+import io.github.ranxian.muguang.data.RechargeChannel
+import io.github.ranxian.muguang.data.RechargeOrder
+import io.github.ranxian.muguang.data.RechargeSigner
 import kotlinx.coroutines.suspendCancellableCoroutine
 import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.RequestBody.Companion.toRequestBody
@@ -403,3 +408,110 @@ suspend fun QzxyService.bluetoothFailOrderSafe(
     bluetoothFailOrder(consumeDate, signature, auth).awaitString(),
     Unit::class.java
 )
+
+// ── 充值 ──
+
+suspend fun QzxyService.getRechargePayModesSafe(): BaseResponse<RechargePayModes> =
+    parse(getRechargePayModes().awaitString(), RechargePayModes::class.java)
+
+suspend fun QzxyService.getRechargePackagesSafe(): BaseResponse<List<RechargePackage>> =
+    parseList(getRechargePackages().awaitString(), RechargePackage::class.java)
+
+/**
+ * 下单。
+ *
+ * 官方 `RechargeActivity` 里这两份 map 是分开构造的，这里照搬：
+ *
+ * 1. **签名输入**只有 `loginCode / payWay / rechargeMoney / telPhone`（`ek.e0.e`）
+ * 2. **请求体**只有 `payWay / rechargeMoney / signature`，认证字段由基类 `t0()` 补
+ *
+ * 本项目没有那个基类（GET 的认证参数由拦截器补，POST 不会），所以认证字段
+ * 在这一层显式拼进 body——少了它们服务端直接回 `8 未获取到用户信息`。
+ *
+ * 响应 data 三种形态：支付宝是**裸字符串**（orderInfo），聚合是
+ * `{cashierUrl, tranNo}`，校园卡是 `{campusRechargeUrl}`，所以走原始 JSON 解析。
+ */
+suspend fun QzxyService.placeRechargeOrderSafe(
+    channel: RechargeChannel,
+    amount: String,
+    telPhone: String,
+    loginCode: String,
+    auth: Map<String, String>
+): BaseResponse<RechargeOrder> {
+    val signature = RechargeSigner.sign(
+        mapOf(
+            "loginCode" to loginCode,
+            "payWay" to channel.payWay,
+            "rechargeMoney" to amount,
+            "telPhone" to telPhone
+        )
+    )
+    val body = linkedMapOf(
+        "payWay" to channel.payWay,
+        "rechargeMoney" to amount,
+        "signature" to signature
+    )
+    // 认证字段：官方 t0() 注入的那一组，一个都不能少
+    body["projectId"] = auth["projectId"].orEmpty()
+    body["accountId"] = auth["accountId"].orEmpty()
+    body["userId"] = auth["userId"].orEmpty()
+    body["telephone"] = auth["telephone"] ?: telPhone
+    body["telPhone"] = telPhone
+    body["loginCode"] = loginCode
+    body["phoneSystem"] = "android"
+    body["version"] = "6.5.28"
+
+    val json = when (channel) {
+        RechargeChannel.ALIPAY -> alipayRecharge(body).awaitString()
+        RechargeChannel.JUHE -> juheRecharge(body).awaitString()
+        RechargeChannel.CAMPUS -> campusRecharge(body).awaitString()
+    }
+    return parseRechargeOrder(json)
+}
+
+/**
+ * 解析下单响应。
+ *
+ * `data` 可能是字符串（支付宝 orderInfo）、对象（收银台/校园卡 URL），
+ * 也可能直接是 null（失败）。这里不按通道硬编码字段名，而是**先按形态判断、再逐个候选键找 URL**：
+ * 只有一个学校的样本，字段名换过的先例在这个 API 上已经出现过。
+ */
+private fun parseRechargeOrder(json: String): BaseResponse<RechargeOrder> {
+    val obj = JsonParser().parse(json).asJsonObject
+    val success = obj.get("success")?.asBoolean ?: false
+    val errorCode = obj.get("errorCode")?.asInt ?: 0
+    val errorMessage = obj.get("errorMessage")?.let { if (it.isJsonNull) null else it.asString }
+    val msg = obj.get("msg")?.let { if (it.isJsonNull) null else it.asString }
+    val dataElement = obj.get("data")
+
+    val order: RechargeOrder? = when {
+        dataElement == null || dataElement.isJsonNull -> null
+        dataElement.isJsonPrimitive -> {
+            val value = dataElement.asString.trim()
+            when {
+                value.isEmpty() -> null
+                // orderInfo 是一大串签名后的 key=value，绝不以 http 开头；
+                // 真有学校直接把收银台 URL 塞进字符串里，那就当 URL 处理
+                value.startsWith("http", ignoreCase = true) -> RechargeOrder.Browser(value)
+                else -> RechargeOrder.Alipay(value)
+            }
+        }
+        dataElement.isJsonObject -> {
+            val data = dataElement.asJsonObject
+            val url = listOf("cashierUrl", "campusRechargeUrl", "payUrl", "url", "jumpUrl", "h5Url")
+                .firstNotNullOfOrNull { key ->
+                    data.get(key)?.takeIf { it.isJsonPrimitive }?.asString?.takeIf { it.isNotBlank() }
+                }
+            when {
+                url != null -> RechargeOrder.Browser(url)
+                // 对象里塞 orderInfo 的情况也兜一下
+                data.get("orderInfo")?.takeIf { it.isJsonPrimitive }?.asString?.isNotBlank() == true ->
+                    RechargeOrder.Alipay(data.get("orderInfo").asString)
+                else -> null
+            }
+        }
+        else -> null
+    }
+    return BaseResponse(success, order, errorCode, errorMessage, msg)
+}
+

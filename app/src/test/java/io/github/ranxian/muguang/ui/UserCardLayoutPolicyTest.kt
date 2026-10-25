@@ -5,9 +5,14 @@ import org.junit.Test
 
 class UserCardLayoutPolicyTest {
     @Test
-    fun `profile page has three default cards`() {
+    fun `profile page has four default cards`() {
         assertEquals(
-            listOf(UserCardType.ACCOUNT, UserCardType.USE_CODE, UserCardType.BOUND_ROOM),
+            listOf(
+                UserCardType.ACCOUNT,
+                UserCardType.RECHARGE,
+                UserCardType.USE_CODE,
+                UserCardType.BOUND_ROOM
+            ),
             UserCardLayoutPolicy.profileDefaults
         )
     }
@@ -30,7 +35,12 @@ class UserCardLayoutPolicyTest {
     @Test
     fun `saved order is normalized within its own page`() {
         assertEquals(
-            listOf(UserCardType.BOUND_ROOM, UserCardType.ACCOUNT, UserCardType.USE_CODE),
+            listOf(
+                UserCardType.BOUND_ROOM,
+                UserCardType.ACCOUNT,
+                UserCardType.RECHARGE,
+                UserCardType.USE_CODE
+            ),
             UserCardLayoutPolicy.restore(
                 UserCardLayoutPolicy.profileDefaults,
                 "BOUND_ROOM,ACCOUNT"
@@ -50,7 +60,10 @@ class UserCardLayoutPolicyTest {
             UserCardLayoutPolicy.settingsDefaults
         )
 
-        assertEquals(listOf(UserCardType.USE_CODE, UserCardType.BOUND_ROOM), result.profile)
+        assertEquals(
+            listOf(UserCardType.RECHARGE, UserCardType.USE_CODE, UserCardType.BOUND_ROOM),
+            result.profile
+        )
         assertEquals(UserCardLayoutPolicy.settingsDefaults + UserCardType.ACCOUNT, result.settings)
     }
 
@@ -73,7 +86,14 @@ class UserCardLayoutPolicyTest {
             settingsSaved = "NOTIFY,TREND,BACKGROUND,LOG,ABOUT,UPDATE,ACCOUNT"
         )
 
-        assertEquals(listOf(UserCardType.USE_CODE, UserCardType.BOUND_ROOM), result.profile)
+        assertEquals(
+            listOf(
+                UserCardType.USE_CODE,
+                UserCardType.BOUND_ROOM,
+                UserCardType.RECHARGE
+            ),
+            result.profile
+        )
         assertEquals(UserCardLayoutPolicy.settingsDefaults + UserCardType.ACCOUNT, result.settings)
     }
 
@@ -86,7 +106,12 @@ class UserCardLayoutPolicyTest {
         )
 
         assertEquals(
-            listOf(UserCardType.BOUND_ROOM, UserCardType.ACCOUNT, UserCardType.USE_CODE),
+            listOf(
+                UserCardType.BOUND_ROOM,
+                UserCardType.ACCOUNT,
+                UserCardType.USE_CODE,
+                UserCardType.RECHARGE
+            ),
             result.profile
         )
         assertEquals(
