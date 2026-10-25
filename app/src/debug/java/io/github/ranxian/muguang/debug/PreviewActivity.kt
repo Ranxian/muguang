@@ -195,16 +195,38 @@ io.github.ranxian.muguang.ui.theme.CircularRevealThemeHost(
     private fun fillFakeState(vm: MainViewModel) {
         // ⚠️ 仅在未登录时调用（调用方已守卫）
         vm.phone = "13800000000"
-        vm.previewSetBoundWasher(
-            demoWasher(),
-            BoundWasherView(
-                statusLabel = "使用中",
-                stageText = "脱水",
-                remainingSec = 21 * 60 + 42,
-                isActive = true,
-                isOwner = true,
-                known = true,
-            )
+        // 双机绑定形态：一台在跑（倒计时）、一台空闲，
+        // 首页「我的洗衣机」卡片的两行布局就照这个验收
+        val washerA = demoWasher()
+        val washerB = demoWasher().copy(
+            deviceName = "洗衣机-3F-05",
+            snCode = "SN20241024000002",
+            macAddress = "AA:BB:CC:DD:EE:02",
+        )
+        val now = System.currentTimeMillis()
+        vm.previewSetBoundWashers(
+            devices = listOf(washerA, washerB),
+            views = mapOf(
+                washerA.snCode to BoundWasherView(
+                    statusLabel = "使用中",
+                    stageText = "脱水",
+                    remainingSec = 21 * 60 + 42,
+                    isActive = true,
+                    isOwner = true,
+                    known = true,
+                ),
+                washerB.snCode to BoundWasherView(
+                    statusLabel = "他人使用中",
+                    stageText = "洗涤",
+                    remainingSec = 18 * 60,
+                    isActive = true,
+                    isOwner = false,
+                    known = true,
+                    remainingIsEstimate = true,
+                    orderPlacedAtMs = now - 6 * 60_000L,
+                ),
+            ),
+            updatedAtMs = mapOf(washerA.snCode to now, washerB.snCode to now)
         )
         // 附近设备列表：名字必须能通过寝室筛选（matchesBoundRoom），否则全被滤掉
         vm.nearbyDevices.addAll(

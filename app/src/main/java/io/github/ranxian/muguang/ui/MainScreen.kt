@@ -56,6 +56,8 @@ import androidx.compose.ui.res.painterResource
 import io.github.ranxian.muguang.QrScanActivity
 import io.github.ranxian.muguang.R
 import io.github.ranxian.muguang.data.BalanceEstimator
+import io.github.ranxian.muguang.data.BoundWasherState
+import io.github.ranxian.muguang.data.BoundWasherView
 import io.github.ranxian.muguang.model.DeviceInfo
 import io.github.ranxian.muguang.model.NearbyDevice
 import io.github.ranxian.muguang.ui.theme.AppColors
@@ -112,11 +114,16 @@ fun MainScreen(phone: String, viewModel: MainViewModel = viewModel()) {
 
     // 绑定洗衣机的状态轮询：使用中 5 秒一次（剩余时间要准），空闲 15 秒一次。
     // snCode 变化（换绑定/解绑）时 LaunchedEffect 自动取消旧循环。
-    LaunchedEffect(viewModel.boundWasher?.snCode) {
-        val sn = viewModel.boundWasher?.snCode ?: return@LaunchedEffect
+    // 刷新节奏跟着「有没有机器在跑」走：跑着 5 秒一轮（倒计时才走得动），
+    // 全空闲 15 秒一轮。绑定列表本身当 key：增删绑定会重启循环，顺序也稳定
+    LaunchedEffect(viewModel.boundWashers) {
+        if (viewModel.boundWashers.isEmpty()) return@LaunchedEffect
         while (true) {
-            viewModel.refreshBoundWasher()
-            delay(if (viewModel.boundWasherView?.isActive == true) 5_000L else 15_000L)
+            viewModel.refreshBoundWashers()
+            delay(
+                if (viewModel.boundWashers.any { viewModel.boundWasherViews[it.snCode]?.isActive == true })
+                    5_000L else 15_000L
+            )
         }
     }
 
@@ -203,10 +210,27 @@ fun MainScreen(phone: String, viewModel: MainViewModel = viewModel()) {
     val cardInk = Color(0xFF1D1D1F)
     val cardInkSub = Color(0xFF4A4A4F)
     val useCustomBg = BackgroundState.config(BackgroundManager.SCOPE_HOME).enabled
+    // 余额卡底部那行洗衣机摘要：一台给状态，两台给「几台在用」的合计——
+    // 两台的名字和明细放「我的洗衣机」卡片，这一行只做一眼扫读
     val washerStatusLine = when {
         viewModel.activeWasherSession != null -> "运行中 · ${viewModel.washerStageText.ifBlank { "进行中" }}"
-        viewModel.boundWasher != null -> viewModel.boundWasherView?.statusLabel ?: "状态未知"
-        else -> "未绑定"
+        viewModel.boundWashers.isEmpty() -> "未绑定"
+        viewModel.boundWashers.size == 1 ->
+            viewModel.boundWasherViews[viewModel.boundWashers.first().snCode]?.statusLabel ?: "状态未知"
+        else -> {
+            val activeCount = viewModel.boundWashers.count {
+                viewModel.boundWasherViews[it.snCode]?.isActive == true
+            }
+            // 状态还没拿到就不说「均空闲」——那等于替服务端担保机器能用
+            val allKnown = viewModel.boundWashers.all {
+                viewModel.boundWasherViews[it.snCode]?.known == true
+            }
+            "${viewModel.boundWashers.size} 台" + when {
+                activeCount > 0 -> " · $activeCount 台使用中"
+                allKnown -> " · 均空闲"
+                else -> ""
+            }
+        }
     }
 
     AnimatedVisibility(visible = visible, enter = fadeIn(), exit = fadeOut()) {
@@ -380,6 +404,24 @@ fun MainScreen(phone: String, viewModel: MainViewModel = viewModel()) {
                             }
                         }
                     }
+                    // ── 我的洗衣机卡片：绑定几台显示几行（最多两台）──
+                    // 和余额卡同一套白霜玻璃材质；每行点开对应的设备详情，
+                    // 绑定/解绑都在详情弹窗里，这张卡不另设按钮
+                    if (viewModel.boundWashers.isNotEmpty()) {
+                        Spacer(Modifier.height(10.dp))
+                        P1WasherCard(
+                            devices = viewModel.boundWashers,
+                            viewFor = { sn -> viewModel.boundWasherViews[sn] },
+                            updatedFor = { sn -> viewModel.boundWasherUpdatedAtMs[sn] ?: 0L },
+                            cardInk = cardInk,
+                            cardInkSub = cardInkSub,
+                            homeBody = homeBody,
+                            onOpenDevice = { device ->
+                                viewModel.selectedDevice = device
+                                viewModel.showDeviceDetail = true
+                            }
+                        )
+                    }
                     // 扫码绑定入口统一收敛到右上角扫码钮（按钮已移除，避免重复入口）
                     // ── 寝室筛选状态 ──
                     if (viewModel.hasBoundRoom) {
@@ -444,15 +486,18 @@ fun MainScreen(phone: String, viewModel: MainViewModel = viewModel()) {
     if (viewModel.showDeviceDetail) {
         val isActive = viewModel.selectedDevice?.snCode?.let { viewModel.isDeviceActive(it) } ?: false
         val selected = viewModel.selectedDevice
+        val selectedBound = selected?.snCode?.let { viewModel.isBoundWasher(it) } ?: false
         DeviceDetailDialog(
             selected,
             isActive,
             viewModel.isOwner,
-            isBoundWasher = selected?.snCode?.let { viewModel.isBoundWasher(it) } ?: false,
+            isBoundWasher = selectedBound,
+            // 只有「没绑过这台 且 两个名额都满了」才需要提示满员；已绑定的那台要能解绑
+            bindFull = !selectedBound && !viewModel.canBindMoreWashers,
             onDismiss = { viewModel.showDeviceDetail = false },
             onConfirm = { viewModel.startShower(phone) },
             onBindWasher = { viewModel.selectedDevice?.let { viewModel.bindWasher(it) } },
-            onUnbindWasher = { viewModel.unbindWasher() }
+            onUnbindWasher = { viewModel.selectedDevice?.let { viewModel.unbindWasher(it) } }
         )
     }
 
@@ -934,17 +979,21 @@ private fun P1HomeDrawer(
                     Text("趣智校园余额", fontSize = 12.sp, fontFamily = homeBody, color = sheetInkSecondary)
                     Text(balanceText, fontSize = 12.sp, fontWeight = FontWeight.SemiBold, color = sheetInk)
                 }
-                // 「我的设备」meta 行：与「当前项目」「趣智校园余额」同构，
-                // 点按 → 已绑定开管理弹窗，未绑定走扫码绑定
-                val washerBound = viewModel.boundWasher
+                // 「我的设备」meta 行：与「当前项目」「趣智校园余额」同构。
+                // 绑了一台 → 点按打开那台的管理弹窗；绑了两台 → 打开「正在使用」的
+                // 那台（那才是最想操作的），都空闲就开第一台；
+                // 逐台管理走首页「我的洗衣机」卡片。未绑定走扫码绑定
+                val washerBoundList = viewModel.boundWashers
                 Row(
                     Modifier
                         .fillMaxWidth()
                         .heightIn(min = 48.dp)
                         .clickable {
-                            val bound = viewModel.boundWasher
-                            if (bound != null) {
-                                viewModel.selectedDevice = bound
+                            if (washerBoundList.isNotEmpty()) {
+                                val target = washerBoundList.firstOrNull {
+                                    viewModel.boundWasherViews[it.snCode]?.isActive == true
+                                } ?: washerBoundList.first()
+                                viewModel.selectedDevice = target
                                 viewModel.showDeviceDetail = true
                             } else {
                                 onScanQr()
@@ -963,13 +1012,27 @@ private fun P1HomeDrawer(
                     Text(
                         when {
                             viewModel.activeWasherSession != null -> "使用中 · ${viewModel.washerStageText.ifBlank { "运行中" }}"
-                            washerBound != null -> washerBound.deviceName
-                            else -> "未绑定 · 点按绑定"
+                            washerBoundList.isEmpty() -> "未绑定 · 点按绑定"
+                            washerBoundList.size == 1 -> washerBoundList.first().deviceName
+                            else -> {
+                                val activeCount = washerBoundList.count {
+                                    viewModel.boundWasherViews[it.snCode]?.isActive == true
+                                }
+                                // 与余额卡摘要同一规矩：状态未知时不断言「均空闲」
+                                val allKnown = washerBoundList.all {
+                                    viewModel.boundWasherViews[it.snCode]?.known == true
+                                }
+                                "已绑 ${washerBoundList.size} 台" + when {
+                                    activeCount > 0 -> " · $activeCount 台使用中"
+                                    allKnown -> " · 均空闲"
+                                    else -> ""
+                                }
+                            }
                         },
                         fontSize = 12.sp,
                         fontWeight = FontWeight.SemiBold,
                         fontFamily = homeBody,
-                        color = if (washerBound == null) sheetLink else sheetInk
+                        color = if (washerBoundList.isEmpty()) sheetLink else sheetInk
                     )
                 }
                 Spacer(Modifier.height(4.dp))
@@ -1058,6 +1121,107 @@ private fun P1HomeDrawer(
                 Spacer(Modifier.height(20.dp))
             }
         }
+        }
+    }
+}
+
+/**
+ * 首页「我的洗衣机」卡片：绑定几台显示几行（最多两台）。
+ *
+ * 材质与余额卡同一套白霜玻璃（0.72 白 + 0.55 白描边 + 20dp 圆角），
+ * 让两张卡读成同一组「资产」而不是两个孤岛；行内是「图标 + 名称/状态 + ›」
+ * 的列表语法，和抽屉里的设备行一致，用户不用学第二种读法。
+ *
+ * 状态在两次服务端刷新之间用本地倒数续走：卡片层每秒跳一次时钟，
+ * 每行用 [BoundWasherState.cardSubline] 现算文案（含「剩余/约剩/HH:mm 下单」的分档）。
+ */
+@Composable
+private fun P1WasherCard(
+    devices: List<DeviceInfo>,
+    viewFor: (String) -> BoundWasherView?,
+    updatedFor: (String) -> Long,
+    cardInk: Color,
+    cardInkSub: Color,
+    homeBody: FontFamily,
+    onOpenDevice: (DeviceInfo) -> Unit
+) {
+    var nowMs by remember { mutableStateOf(System.currentTimeMillis()) }
+    LaunchedEffect(Unit) {
+        while (true) {
+            delay(1_000)
+            nowMs = System.currentTimeMillis()
+        }
+    }
+    Box(
+        Modifier
+            .padding(horizontal = 16.dp)
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(20.dp))
+            .background(Color.White.copy(alpha = 0.72f))
+            .border(1.dp, Color.White.copy(alpha = 0.55f), RoundedCornerShape(20.dp))
+            .padding(horizontal = 16.dp, vertical = 12.dp)
+    ) {
+        Column {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Box(
+                    Modifier
+                        .size(6.dp)
+                        .clip(CircleShape)
+                        .background(Color(0xFF34C759))
+                )
+                Spacer(Modifier.width(6.dp))
+                Text(
+                    "我的洗衣机 · ${devices.size} 台",
+                    fontSize = 10.sp,
+                    fontFamily = homeBody,
+                    color = cardInkSub
+                )
+            }
+            devices.forEachIndexed { index, device ->
+                if (index > 0) {
+                    Box(
+                        Modifier
+                            .fillMaxWidth()
+                            .height(1.dp)
+                            .background(Color(0x14000000))
+                    )
+                }
+                val view = viewFor(device.snCode)
+                Row(
+                    Modifier
+                        .fillMaxWidth()
+                        .heightIn(min = 48.dp)
+                        .clickable { onOpenDevice(device) }
+                        .padding(vertical = 8.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    // 正在洗的那台才转：动画本身就是「在跑」的信号，不用再加色点
+                    WashingMachineLoader(running = view?.isActive == true, size = 28.dp)
+                    Spacer(Modifier.width(12.dp))
+                    Column(Modifier.weight(1f)) {
+                        Text(
+                            device.displayName,
+                            fontSize = 13.sp,
+                            fontWeight = FontWeight.SemiBold,
+                            fontFamily = homeBody,
+                            color = cardInk,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis
+                        )
+                        Text(
+                            view?.let {
+                                BoundWasherState.cardSubline(it, updatedFor(device.snCode), nowMs)
+                            } ?: "读取中…",
+                            fontSize = 11.sp,
+                            fontFamily = homeBody,
+                            color = cardInkSub,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis
+                        )
+                    }
+                    Text("›", fontSize = 16.sp, color = Color(0x661D1D1F))
+                }
+            }
         }
     }
 }

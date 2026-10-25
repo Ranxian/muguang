@@ -28,7 +28,9 @@ import io.github.ranxian.muguang.api.queryUsingSafe
 import io.github.ranxian.muguang.data.BalanceEstimator
 import io.github.ranxian.muguang.data.ActiveOrderRepository
 import io.github.ranxian.muguang.data.BoundWasherState
+import io.github.ranxian.muguang.data.BoundWasherStore
 import io.github.ranxian.muguang.data.BoundWasherView
+import io.github.ranxian.muguang.data.BoundOrderTracker
 import io.github.ranxian.muguang.data.BleArbiter
 import io.github.ranxian.muguang.data.CloseOutcome
 import io.github.ranxian.muguang.data.OpenOutcome
@@ -282,18 +284,22 @@ class MainViewModel : ViewModel() {
     var washerRemainingSec by mutableStateOf(0)
         private set
 
-    // ── 已绑定洗衣机 ──
+    // ── 已绑定洗衣机（最多两台） ──
     // 与 activeWasherSession 无关：绑定只记住设备，不要求本机下过单。
     // 状态来自 washer/status，所以别人正在洗也能看到阶段与剩余时间。
-    var boundWasher by mutableStateOf<DeviceInfo?>(null)
+    /** 绑定的设备本体，按绑定先后排序；键定位一律用 snCode */
+    var boundWashers by mutableStateOf<List<DeviceInfo>>(emptyList())
         private set
-    var boundWasherView by mutableStateOf<BoundWasherView?>(null)
-        private set
+    /** 每台设备的状态投影，按 snCode 索引（哪台的结果写哪台，互不覆盖） */
+    val boundWasherViews = mutableStateMapOf<String, BoundWasherView>()
+    /** 每台设备本轮状态的写入时间戳（服务器时钟），供界面做本地倒计时 */
+    val boundWasherUpdatedAtMs = mutableStateMapOf<String, Long>()
+    /** 任一台刷新进行中（一次刷新把所有绑定设备查完，见 [refreshBoundWashers]） */
     var boundWasherRefreshing by mutableStateOf(false)
         private set
-    /** 本轮状态写入的时间戳（服务器时钟），供界面做本地倒计时 */
-    var boundWasherUpdatedAtMs by mutableStateOf(0L)
-        private set
+    /** 还能不能再绑一台（详情弹窗的绑定按钮靠它决定置灰还是可点） */
+    val canBindMoreWashers: Boolean
+        get() = boundWashers.size < BoundWasherStore.MAX_BINDINGS
 
     private var washerPollJob: Job? = null
 
@@ -308,22 +314,17 @@ class MainViewModel : ViewModel() {
     private var washerRemainingUpdatedAtMs: Long = 0L
 
     /**
-     * 绑定设备的「订单视角」观测状态，用来把别人的倒计时从估算升级成实测。
+     * 每台绑定设备一份的「订单视角」观测器，把别人的倒计时从估算升级成实测。
      *
      * 服务端对别人的订单**不给剩余秒**（`OrderLastBean` 只有 `modeTime` 总时长和
      * `consumeDate` 下单时间），所以只能靠把自己看到的启动时刻记下来：
      * 轮询到订单号切换的那一刻，就是这一单真正上水的时间。
      * 已知剩余 = `modeTime − (服务器现在 − 观测到的启动时刻)`。
+     *
+     * 按 snCode 各配一个：两台设备各自轮询各自的订单号，观测状态不能共用，
+     * 否则 A 机的订单切换会被当成 B 机的上水时刻。
      */
-    private var boundOrderKey: String = ""
-    private var boundOrderStartedAtMs: Long = 0L
-    /** 上一轮轮询看到的订单号与服务器时刻，用来判断「订单号是不是这一轮才换的」 */
-    private var lastPollOrderKey: String = ""
-    private var lastPollServerMs: Long = 0L
-    /** 上一轮正在跑的那单（订单号 / 总时长 / 启动时刻），用来判断新单是不是在排队 */
-    private var prevRunningKey: String = ""
-    private var prevRunningModeTime: Int = 0
-    private var prevRunningStartMs: Long = 0L
+    private val boundTrackers = mutableMapOf<String, BoundOrderTracker>()
     private var boundPollJob: Job? = null
 
     /**
@@ -437,25 +438,39 @@ class MainViewModel : ViewModel() {
         }
     }
 
-    // ── 绑定洗衣机 ──
+    // ── 绑定洗衣机（最多两台） ──
 
     fun isBoundWasher(snCode: String): Boolean =
-        snCode.isNotBlank() && boundWasher?.snCode == snCode
+        snCode.isNotBlank() && boundWashers.any { it.snCode == snCode }
+
+    /**
+     * 仅供 debug 预览（src/debug 的 PreviewActivity）灌假绑定状态；
+     * 正式代码一律走 [bindWasher] / [refreshBoundWashers]，状态只能来自服务端。
+     */
+    fun previewSetBoundWasher(device: DeviceInfo, view: BoundWasherView, updatedAtMs: Long = System.currentTimeMillis()) {
+        previewSetBoundWashers(listOf(device), mapOf(device.snCode to view), mapOf(device.snCode to updatedAtMs))
+    }
+
+    /** 同上，双机预览用：一次灌两台，首页卡片才能看到真实布局 */
+    fun previewSetBoundWashers(
+        devices: List<DeviceInfo>,
+        views: Map<String, BoundWasherView>,
+        updatedAtMs: Map<String, Long>
+    ) {
+        boundWashers = devices
+        boundWasherViews.clear()
+        views.forEach { (sn, v) -> boundWasherViews[sn] = v }
+        boundWasherUpdatedAtMs.clear()
+        updatedAtMs.forEach { (sn, t) -> boundWasherUpdatedAtMs[sn] = t }
+    }
 
     /**
      * 绑定一台洗衣机。只接受 `isLaundry` 的设备——避免把热水器/饮水机绑成「我的洗衣机」，
      * 之后每次刷新都拿错设备去查状态。
+     *
+     * 已经绑过这台 → 提示不重复绑；绑满 [BoundWasherStore.MAX_BINDINGS] 台 → 拦下并
+     * 引导先解绑。绑定顺序即列表顺序，新绑的排在后面。
      */
-    /**
-     * 仅供 debug 预览（src/debug 的 PreviewActivity）灌假绑定状态；
-     * 正式代码一律走 [bindWasher] / [refreshBoundWasher]，状态只能来自服务端。
-     */
-    fun previewSetBoundWasher(device: DeviceInfo, view: BoundWasherView, updatedAtMs: Long = System.currentTimeMillis()) {
-        boundWasher = device
-        boundWasherView = view
-        boundWasherUpdatedAtMs = updatedAtMs
-    }
-
     fun bindWasher(device: DeviceInfo) {
         if (!device.isLaundry) {
             toastMessage = "只有洗衣机可以绑定"
@@ -465,44 +480,56 @@ class MainViewModel : ViewModel() {
             toastMessage = "设备缺少 SN 码，无法绑定"
             return
         }
-        PrefsHelper.boundWasherJson = gson.toJson(device)
-        boundWasher = device
-        boundWasherView = BoundWasherState.from(
+        if (isBoundWasher(device.snCode)) {
+            toastMessage = "「${device.displayName}」已经绑定过了"
+            return
+        }
+        if (!canBindMoreWashers) {
+            toastMessage = "最多同时绑定 ${BoundWasherStore.MAX_BINDINGS} 台洗衣机，请先解绑一台"
+            return
+        }
+        val next = boundWashers + device
+        saveBoundWashers(next)
+        boundWashers = next
+        boundWasherViews[device.snCode] = BoundWasherState.from(
             status = null,
             sessionStartedAtMs = null,
             nowMs = System.currentTimeMillis(),
             failed = false
         )
-        boundWasherUpdatedAtMs = System.currentTimeMillis()
+        boundWasherUpdatedAtMs[device.snCode] = System.currentTimeMillis()
         toastMessage = "已绑定「${device.displayName}」"
-        refreshBoundWasher()
+        refreshBoundWashers()
     }
 
-    fun unbindWasher() {
+    fun unbindWasher(device: DeviceInfo) {
+        val next = boundWashers.filterNot { it.snCode == device.snCode }
+        if (next.size == boundWashers.size) return
+        saveBoundWashers(next)
+        boundWashers = next
+        boundWasherViews.remove(device.snCode)
+        boundWasherUpdatedAtMs.remove(device.snCode)
+        boundTrackers.remove(device.snCode)
+        toastMessage = "已解绑「${device.displayName}」"
+        if (next.isEmpty()) stopBoundWasherPoll()
+    }
+
+    /** 列表落盘；顺手清掉 1.0 的单台旧键，避免全部解绑后旧绑定复活 */
+    private fun saveBoundWashers(devices: List<DeviceInfo>) {
+        PrefsHelper.boundWashersJson = BoundWasherStore.toJson(devices)
         PrefsHelper.boundWasherJson = ""
-        boundWasher = null
-        boundWasherView = null
-        boundWasherRefreshing = false
-        boundWasherUpdatedAtMs = 0L
-        stopBoundWasherPoll()
-        toastMessage = "已解除洗衣机绑定"
     }
 
-    /** 解绑 / 登出时停掉连续轮询，并把「订单视角」观测状态清干净 */
+    /** 解绑 / 登出时停掉连续轮询，并把每台设备的观测状态清干净 */
     private fun stopBoundWasherPoll() {
         boundPollJob?.cancel()
         boundPollJob = null
-        boundOrderKey = ""
-        boundOrderStartedAtMs = 0L
-        lastPollOrderKey = ""
-        lastPollServerMs = 0L
-        prevRunningKey = ""
-        prevRunningModeTime = 0
-        prevRunningStartMs = 0L
+        boundTrackers.values.forEach { it.reset() }
+        boundTrackers.clear()
     }
 
     /**
-     * 查一次绑定洗衣机的状态。别人正在用也要能显示，所以不依赖 [activeWasherSession]。
+     * 把所有绑定洗衣机的状态各查一遍。别人正在用也要能显示，所以不依赖 [activeWasherSession]。
      *
      * 双查：`washer/status` 拿本机视角的剩余秒数，`lastOrder/byMac` 拿设备视角的
      * 「有没有人在用」——有的学校对别人的订单在 status 上直接回空闲，只查 status
@@ -512,175 +539,113 @@ class MainViewModel : ViewModel() {
      * `modeTime` 和服务器下发的 `consumeDate` 相减，一边是本机时钟、一边是服务器时间，
      * 手机时间差几分钟倒计时就差几分钟。
      *
-     * 两条都失败才标记「状态未知」，不能落成「空闲」——那会让用户以为机器可以用。
+     * 两台设备**串行**查而不是并发：单台一查就是 2 个请求，并发打 4 个容易触发限流；
+     * 刷新本来就由界面的秒级倒数驱动，串行多花的几百毫秒感知不到。
+     * 任一台的结果只写自己的 snCode 槽位，互不覆盖。
      */
-    fun refreshBoundWasher() {
-        val device = boundWasher ?: return
+    fun refreshBoundWashers() {
+        val devices = boundWashers
+        if (devices.isEmpty()) return
         if (boundWasherRefreshing) return
         boundWasherRefreshing = true
         viewModelScope.launch {
             try {
-                val status = WasherController.status(device)
-                val lastOrder = WasherController.lastOrder(device)
-                val nowMs = NetworkModule.serverNowMs()
-                val startedAt = activeWasherSession
-                    ?.takeIf { it.device.snCode == device.snCode }
-                    ?.startedAtMs
-
-                val (observedStart, startObserved) = observeBoundOrderStart(lastOrder, nowMs)
-                val view = BoundWasherState.from(
-                    status = status,
-                    lastOrder = lastOrder,
-                    sessionStartedAtMs = startedAt,
-                    nowMs = nowMs,
-                    failed = status == null && lastOrder == null,
-                    myAccountId = NetworkModule.authFields()["accountId"],
-                    startedAtOverrideMs = observedStart,
-                    startIsObserved = startObserved
-                )
-                boundWasherView = view
-                boundWasherUpdatedAtMs = nowMs
-
-                AppLogger.w(
-                    "BOUND ${device.snCode} label=${view.statusLabel}" +
-                        " remain=${view.remainingSec}s estimate=${view.remainingIsEstimate}" +
-                        " | srvNow=$nowMs offset=${NetworkModule.serverClockOffset()}ms" +
-                        " | status.time=${status?.time} status.modeTime=${status?.modeTime}" +
-                        " status.owner=${status?.isOwner} status.display=${status?.liquidOrderStatusDisplay}" +
-                        " | order.key=${lastOrder?.orderKey?.take(12)} order.modeTime=${lastOrder?.modeTime}" +
-                        " order.status=${lastOrder?.liquidOrderStatus} order.consumeDate=${lastOrder?.consumeDate}" +
-                        " order.account=${lastOrder?.accountId} observedStart=$observedStart observed=$startObserved"
-                )
-
-                if (view.isActive) ensureBoundWasherPoll()
-            } catch (e: CancellationException) {
-                throw e
-            } catch (e: Exception) {
-                AppLogger.e("刷新绑定洗衣机状态失败", e)
-                boundWasherView = BoundWasherState.from(
-                    status = null,
-                    sessionStartedAtMs = null,
-                    nowMs = NetworkModule.serverNowMs(),
-                    failed = true
-                )
-                boundWasherUpdatedAtMs = NetworkModule.serverNowMs()
+                for (device in devices) refreshOneBoundWasher(device)
             } finally {
                 boundWasherRefreshing = false
             }
-        }
-    }
-
-    /**
-     * 判断「这一单是什么时候真正开始洗的」。
-     *
-     * 服务端不给别人订单的剩余秒，`consumeDate` 又只是**下单**时间：上一单还没洗完就
-     * 付钱的单会排队，真正上水可能晚十几分钟——按 `consumeDate` 算就会少报十几分钟
-     * （用户实测：机器剩 41 分钟，卡片说 28 分钟）。
-     *
-     * 两条路把它定准：
-     * - 轮询看到订单号切换 → 启动就在上一轮和这一轮之间，取中点；
-     * - 上一单还在跑就出现了新单 → 新单在排队，启动时间 ≈ 上一单的结束时间。
-     *
-     * @return (启动时刻毫秒, 是否亲眼观测到)。第二个值为 false 时那个时刻只是预测，
-     *   界面仍要标「约」。
-     */
-    private fun observeBoundOrderStart(lastOrder: OrderLastBean?, nowMs: Long): Pair<Long, Boolean> {
-        // lastOrder == null 既可能是「没有单」也可能是「这次查询失败」，分不出来，
-        // 所以不清状态：真没单的话状态会在下一轮正常收敛，别因为一次抖动把观测到的启动时刻洗掉
-        if (lastOrder == null) {
-            return boundOrderStartedAtMs to (boundOrderStartedAtMs > 0L)
-        }
-
-        val currentKey = lastOrder.orderKey
-        val runningNow = lastOrder.isRunning(nowMs)
-
-        var startMs = 0L
-        var observed = false
-        if (runningNow && currentKey.isNotEmpty()) {
-            if (currentKey == boundOrderKey && boundOrderStartedAtMs > 0L) {
-                // 之前就盯着这一单，启动时刻已经定下来了
-                startMs = boundOrderStartedAtMs
-                observed = true
-            } else {
-                val prevEndMs = if (prevRunningKey.isNotEmpty() && prevRunningKey != currentKey &&
-                    prevRunningModeTime > 0 && prevRunningStartMs > 0L
-                ) {
-                    prevRunningStartMs + prevRunningModeTime * 1000L
-                } else {
-                    0L
-                }
-                // 只有上一轮刚看过（3 分钟内）才算「亲眼看到切换」；
-                // 放太久的话中点会落在很久以前，反而更离谱
-                val sawSwitch = lastPollOrderKey.isNotEmpty() && currentKey != lastPollOrderKey &&
-                    lastPollServerMs > 0L && nowMs - lastPollServerMs <= 180_000L
-                when {
-                    // 上一单还没洗完：这单在排队，真正上水在上一单结束之后
-                    prevEndMs > nowMs -> {
-                        startMs = prevEndMs
-                        observed = false
-                    }
-                    // 亲眼看到订单号在这一轮切换：启动发生在两次轮询之间
-                    sawSwitch -> {
-                        startMs = (lastPollServerMs + nowMs) / 2
-                        observed = true
-                    }
-                    // 第一次看到这一单，不知道它什么时候开始的 → 交给 consumeDate 估算
-                    else -> startMs = 0L
-                }
+            if (devices.any { boundWasherViews[it.snCode]?.isActive == true }) {
+                ensureBoundWasherPoll()
             }
         }
+    }
 
-        boundOrderKey = if (runningNow) currentKey else ""
-        boundOrderStartedAtMs = startMs
+    /** 单台设备的双查 + 观测更新；异常只污染这一台的槽位，不拖垮另一台 */
+    private suspend fun refreshOneBoundWasher(device: DeviceInfo) {
+        try {
+            val status = WasherController.status(device)
+            val lastOrder = WasherController.lastOrder(device)
+            val nowMs = NetworkModule.serverNowMs()
+            val startedAt = activeWasherSession
+                ?.takeIf { it.device.snCode == device.snCode }
+                ?.startedAtMs
 
-        if (runningNow) {
-            prevRunningKey = currentKey
-            prevRunningModeTime = lastOrder.modeTime
-            prevRunningStartMs = startMs.takeIf { it > 0L } ?: lastOrder.startAtMs
-        } else {
-            prevRunningKey = ""
-            prevRunningModeTime = 0
-            prevRunningStartMs = 0L
+            val tracker = boundTrackers.getOrPut(device.snCode) { BoundOrderTracker() }
+            val (observedStart, startObserved) = tracker.observe(lastOrder, nowMs)
+            val view = BoundWasherState.from(
+                status = status,
+                lastOrder = lastOrder,
+                sessionStartedAtMs = startedAt,
+                nowMs = nowMs,
+                failed = status == null && lastOrder == null,
+                myAccountId = NetworkModule.authFields()["accountId"],
+                startedAtOverrideMs = observedStart,
+                startIsObserved = startObserved
+            )
+            boundWasherViews[device.snCode] = view
+            boundWasherUpdatedAtMs[device.snCode] = nowMs
+
+            AppLogger.w(
+                "BOUND ${device.snCode} label=${view.statusLabel}" +
+                    " remain=${view.remainingSec}s estimate=${view.remainingIsEstimate}" +
+                    " | srvNow=$nowMs offset=${NetworkModule.serverClockOffset()}ms" +
+                    " | status.time=${status?.time} status.modeTime=${status?.modeTime}" +
+                    " status.owner=${status?.isOwner} status.display=${status?.liquidOrderStatusDisplay}" +
+                    " | order.key=${lastOrder?.orderKey?.take(12)} order.modeTime=${lastOrder?.modeTime}" +
+                    " order.status=${lastOrder?.liquidOrderStatus} order.consumeDate=${lastOrder?.consumeDate}" +
+                    " order.account=${lastOrder?.accountId} observedStart=$observedStart observed=$startObserved"
+            )
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            AppLogger.e("刷新绑定洗衣机状态失败（${device.snCode}）", e)
+            // 两条渠道都挂了才叫失败；失败只落「状态未知」，绝不能落「空闲」
+            boundWasherViews[device.snCode] = BoundWasherState.from(
+                status = null,
+                sessionStartedAtMs = null,
+                nowMs = NetworkModule.serverNowMs(),
+                failed = true
+            )
+            boundWasherUpdatedAtMs[device.snCode] = NetworkModule.serverNowMs()
         }
-        lastPollOrderKey = currentKey
-        lastPollServerMs = nowMs
-        return startMs to observed
     }
 
     /**
-     * 机器在被使用时连续轮询（45 秒一次）。
+     * 任一台在被使用时连续轮询（45 秒一次，两台一起刷）。
      *
      * 这不为「刷新得更勤」，而是为了抓住订单切换的瞬间：只有连续看着，排队单的真正
      * 上水时间才可观测；否则一打开就看到「已在下单后第 17 分钟」，怎么算都不准。
-     * 空闲时立刻停掉，不白打接口。
+     * 全部空闲时立刻停掉，不白打接口。
      */
     private fun ensureBoundWasherPoll() {
         if (boundPollJob?.isActive == true) return
         boundPollJob = viewModelScope.launch {
             while (isActive) {
                 delay(45_000)
-                if (boundWasher == null || boundWasherView?.isActive != true) break
-                refreshBoundWasher()
+                val anyActive = boundWashers.any { boundWasherViews[it.snCode]?.isActive == true }
+                if (boundWashers.isEmpty() || !anyActive) break
+                refreshBoundWashers()
             }
         }
     }
 
     private fun restoreBoundWasher() {
-        boundWasher = runCatching {
-            gson.fromJson(PrefsHelper.boundWasherJson, DeviceInfo::class.java)
-        }.getOrNull()?.takeIf { it.isLaundry && it.snCode.isNotBlank() }
-        boundWasherView = if (boundWasher != null) {
-            BoundWasherState.from(
+        val restored = BoundWasherStore.parse(PrefsHelper.boundWashersJson, PrefsHelper.boundWasherJson)
+            .filter { it.isLaundry && it.snCode.isNotBlank() }
+        boundWashers = restored
+        boundWasherViews.clear()
+        boundWasherUpdatedAtMs.clear()
+        boundTrackers.clear()
+        restored.forEach { device ->
+            boundWasherViews[device.snCode] = BoundWasherState.from(
                 status = null,
                 sessionStartedAtMs = null,
                 nowMs = System.currentTimeMillis(),
                 failed = false
             )
-        } else {
-            null
+            boundWasherUpdatedAtMs[device.snCode] = System.currentTimeMillis()
         }
-        boundWasherUpdatedAtMs = if (boundWasher != null) System.currentTimeMillis() else 0L
-        if (boundWasher != null) refreshBoundWasher()
+        if (restored.isNotEmpty()) refreshBoundWashers()
     }
 
     // ── 账单 ──
@@ -916,10 +881,10 @@ class MainViewModel : ViewModel() {
         washerRemainingUpdatedAtMs = 0L
         // 绑定关系存在 Prefs 里（按项目隔离），退出登录只清内存态；
         // 重新登录同一项目时 restoreBoundWasher() 会恢复
-        boundWasher = null
-        boundWasherView = null
+        boundWashers = emptyList()
+        boundWasherViews.clear()
         boundWasherRefreshing = false
-        boundWasherUpdatedAtMs = 0L
+        boundWasherUpdatedAtMs.clear()
         stopBoundWasherPoll()
         dismissWasherModes()
         ownerBySn.clear()

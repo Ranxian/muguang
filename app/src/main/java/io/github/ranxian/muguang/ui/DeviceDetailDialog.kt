@@ -21,6 +21,8 @@ fun DeviceDetailDialog(
     isActive: Boolean = false,
     isOwner: Boolean = true,
     isBoundWasher: Boolean = false,
+    /** 没绑过这台、但两个绑定名额都满了：绑定按钮换成满员说明 */
+    bindFull: Boolean = false,
     onDismiss: () -> Unit,
     onConfirm: () -> Unit,
     onBindWasher: (() -> Unit)? = null,
@@ -79,15 +81,21 @@ fun DeviceDetailDialog(
                         color = AppColors.TextSecondary,
                         lineHeight = 18.sp
                     )
-                    // 绑定只记住设备，不要求现在下单；绑定后首页会常驻一张
-                    // 「我的洗衣机」卡片，别人正在洗也能看到阶段与剩余时间
+                    // 绑定只记住设备，不要求现在下单；绑定后首页常驻「我的洗衣机」
+                    // 卡片（最多两台），别人正在洗也能看到阶段与剩余时间
                     Spacer(Modifier.height(2.dp))
-                    if (isBoundWasher) {
-                        TextButton(onClick = { onUnbindWasher?.invoke() }) {
+                    when {
+                        isBoundWasher -> TextButton(onClick = { onUnbindWasher?.invoke() }) {
                             Text("已绑定为我的洗衣机 · 解除绑定", fontSize = 13.sp)
                         }
-                    } else if (onBindWasher != null) {
-                        TextButton(onClick = { onBindWasher() }) {
+                        bindFull -> Text(
+                            // 满员不弹新窗、也不放禁用态按钮——一句说明 + 引导去解绑，
+                            // 比「能点但点了报错」少一步挫败
+                            "已绑定 2 台洗衣机 · 解绑一台后可再绑定",
+                            fontSize = 13.sp,
+                            color = AppColors.TextSecondary
+                        )
+                        onBindWasher != null -> TextButton(onClick = { onBindWasher() }) {
                             Text("绑定为我的洗衣机", fontSize = 13.sp)
                         }
                     }

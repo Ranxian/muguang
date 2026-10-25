@@ -105,7 +105,7 @@ object PrefsHelper {
         val bases = listOf(
             "lastDeviceProjectId", "lastDeviceName", "lastDeviceRawName", "lastDeviceMac",
             "lastDeviceSnCode", "lastDeviceEmoji", "lastDeviceTypeName", "lastDeviceWithholdMoney",
-            "boundRoom", "bleSessionJson", "washerSessionJson", "boundWasherJson", "widgetNearbyJson",
+            "boundRoom", "bleSessionJson", "washerSessionJson", "boundWasherJson", "boundWashersJson", "widgetNearbyJson",
             "widgetNearbyTime", "widgetBillJson", "widgetBillTime", "lastConsumeTime"
         )
         bases.forEach { base ->
@@ -408,9 +408,20 @@ object PrefsHelper {
      * project-scoped：不同学校的洗衣机不是同一台，切换项目后绑定必须跟着项目走。
      * 存完整 DeviceInfo 而不是只存 snCode，是因为查状态要用 `snCode` + `devTypeStatus`
      * （海尔分支）等字段，重新查一次设备信息既慢又可能失败。
+     *
+     * ⚠️ 这是 1.0 的**单台**格式，已停止写入；新代码用 [boundWashersJson]（数组），
+     * 读取时作为迁移源兜底，见 `BoundWasherStore.parse`。
      */
     var boundWasherJson: String get() = prefs.getString(projectScopedKey("boundWasherJson"), "") ?: ""
         set(v) = prefs.edit().putString(projectScopedKey("boundWasherJson"), v).apply()
+
+    /**
+     * 已绑定的洗衣机**列表**（`DeviceInfo` JSON 数组，最多两台，见 `BoundWasherStore`）。
+     * 同样 project-scoped；写入时由调用方顺手清掉 [boundWasherJson]，
+     * 避免「全部解绑后旧键复活出 1.0 那台」。
+     */
+    var boundWashersJson: String get() = prefs.getString(projectScopedKey("boundWashersJson"), "") ?: ""
+        set(v) = prefs.edit().putString(projectScopedKey("boundWashersJson"), v).apply()
 
     /**
      * 通知里「结束使用」按钮的 `PendingIntent` requestCode（按 snCode **稳定分配**）。

@@ -244,6 +244,43 @@ object BoundWasherState {
         }
     }
 
+    /**
+     * 首页「我的洗衣机」卡片里每台设备下面那行小字（纯函数，单测覆盖）。
+     *
+     * 展示优先级——只说服务端能给的事实：
+     * 1. 拉取失败 → 「未能获取设备状态」，不能落「空闲」骗人说机器能用
+     * 2. 空闲 → 「空闲」
+     * 3. 服务端精确剩余秒 → 「剩余 12:05」（两次刷新之间用本地倒数续走）
+     * 4. 别人的单 → 「14:32 下单」——估算值不显示（排队单能差十几分钟），
+     *    下单时间是服务端事实，不会错
+     * 5. 自己的单但只剩估算 → 「约剩 12:05」，标「约」
+     * 6. 都没有 → 阶段文案兜底
+     */
+    fun cardSubline(view: BoundWasherView, updatedAtMs: Long, nowMs: Long): String = when {
+        !view.known -> "未能获取设备状态"
+        !view.isActive -> "空闲"
+        view.remainingSec > 0 && !view.remainingIsEstimate ->
+            "剩余 " + paddedClock(countdown(view.remainingSec, updatedAtMs, nowMs))
+        !view.isOwner && view.orderPlacedAtMs > 0 ->
+            formatHourMinute(view.orderPlacedAtMs) + " 下单"
+        view.remainingSec > 0 ->
+            "约剩 " + paddedClock(countdown(view.remainingSec, updatedAtMs, nowMs))
+        else -> view.stageText.ifBlank { "运行中" }
+    }
+
+    /**
+     * `05:00` / `1:02:05`——卡片行内专用：分钟补成两位，行宽稳定，
+     * 「剩余 05:00」和「剩余 12:05」在卡片里对得整齐。
+     * [formatClock] 不补零且别处共用，这里不改它。
+     */
+    private fun paddedClock(sec: Int): String {
+        val total = sec.coerceAtLeast(0)
+        val h = total / 3600
+        val m = (total % 3600) / 60
+        val s = total % 60
+        return if (h > 0) "%d:%02d:%02d".format(h, m, s) else "%02d:%02d".format(m, s)
+    }
+
     /** 服务器时间戳 → `21:03`（下单时刻用；服务器时钟已校准，分秒可信） */
     fun formatHourMinute(ms: Long): String =
         if (ms <= 0L) "" else java.text.SimpleDateFormat("HH:mm", java.util.Locale.CHINA)
