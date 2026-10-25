@@ -929,11 +929,15 @@ private fun P1HomeDrawer(
                     .background(Color.White)
                     .verticalScroll(rememberScrollState())
             ) {
-                // 探测行：雷达 + 「探测」标题左对齐一行；展开抽屉自动转三圈并触发扫描
+                // 探测行：雷达 + 「探测」标题左对齐一行；展开抽屉自动转三圈并触发扫描。
+                // 触控热区给整行（48dp 下限）：雷达本体只有 22dp，瞄准它点太费眼——
+                // 这条横带里点哪儿都算探测，雷达只是视觉锚点
                 if (collapsedOffset - offsetPx > 120f) {
                     Row(
                         Modifier
                             .fillMaxWidth()
+                            .heightIn(min = 48.dp)
+                            .clickable(onClick = onScanStart)
                             .padding(horizontal = 22.dp, vertical = 10.dp),
                         verticalAlignment = Alignment.CenterVertically
                     ) {
@@ -979,24 +983,33 @@ private fun P1HomeDrawer(
                     Text("趣智校园余额", fontSize = 12.sp, fontFamily = homeBody, color = sheetInkSecondary)
                     Text(balanceText, fontSize = 12.sp, fontWeight = FontWeight.SemiBold, color = sheetInk)
                 }
-                // 「我的设备」meta 行：与「当前项目」「趣智校园余额」同构。
-                // 绑了一台 → 点按打开那台的管理弹窗；绑了两台 → 打开「正在使用」的
-                // 那台（那才是最想操作的），都空闲就开第一台；
-                // 逐台管理走首页「我的洗衣机」卡片。未绑定走扫码绑定
+                // 「我的设备」区：meta 汇总行 + 绑了两台时每台再列一行。
+                // 汇总行只在未绑定时是入口（点按去扫码）；绑一台时点按直接开那台
+                // （单机用户的行为不变）；两台时汇总行退化为说明，逐台的入口
+                // 是下面那两行——两台都得一键点得到，不能只开「正在跑的那台」
                 val washerBoundList = viewModel.boundWashers
                 Row(
                     Modifier
                         .fillMaxWidth()
                         .heightIn(min = 48.dp)
-                        .clickable {
-                            if (washerBoundList.isNotEmpty()) {
-                                val target = washerBoundList.firstOrNull {
-                                    viewModel.boundWasherViews[it.snCode]?.isActive == true
-                                } ?: washerBoundList.first()
-                                viewModel.selectedDevice = target
-                                viewModel.showDeviceDetail = true
+                        .clickable(
+                            enabled = washerBoundList.size <= 1 ||
+                                viewModel.activeWasherSession != null
+                        ) {
+                            if (viewModel.activeWasherSession != null || washerBoundList.isEmpty()) {
+                                // 正在跑：打开在跑的那台；没绑定：去扫码
+                                val target = viewModel.activeWasherSession?.device
+                                    ?: washerBoundList.firstOrNull()
+                                if (target != null) {
+                                    viewModel.selectedDevice = target
+                                    viewModel.showDeviceDetail = true
+                                } else {
+                                    onScanQr()
+                                }
                             } else {
-                                onScanQr()
+                                // 单台：直接开它
+                                viewModel.selectedDevice = washerBoundList.first()
+                                viewModel.showDeviceDetail = true
                             }
                         }
                         .padding(horizontal = 22.dp, vertical = 8.dp),
@@ -1034,6 +1047,57 @@ private fun P1HomeDrawer(
                         fontFamily = homeBody,
                         color = if (washerBoundList.isEmpty()) sheetLink else sheetInk
                     )
+                }
+                // 双机时的逐台行：与下方「附近设备」同一套列表语法（图标 + 名称/状态 + ›），
+                // 状态小字复用首页卡片同一分档（剩余/约剩/下单时刻），两个入口说法一致
+                if (washerBoundList.size > 1) {
+                    val drawerNowMs = System.currentTimeMillis()
+                    washerBoundList.forEach { device ->
+                        val view = viewModel.boundWasherViews[device.snCode]
+                        Row(
+                            Modifier
+                                .fillMaxWidth()
+                                .heightIn(min = 44.dp)
+                                .clickable {
+                                    viewModel.selectedDevice = device
+                                    viewModel.showDeviceDetail = true
+                                }
+                                .padding(start = 30.dp, top = 6.dp, end = 22.dp, bottom = 6.dp),
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            WashingMachineLoader(
+                                running = view?.isActive == true,
+                                size = 26.dp,
+                            )
+                            Spacer(Modifier.width(12.dp))
+                            Column(Modifier.weight(1f)) {
+                                Text(
+                                    device.displayName,
+                                    fontSize = 13.sp,
+                                    fontWeight = FontWeight.SemiBold,
+                                    fontFamily = homeBody,
+                                    color = sheetInk,
+                                    maxLines = 1,
+                                    overflow = TextOverflow.Ellipsis
+                                )
+                                Text(
+                                    view?.let {
+                                        BoundWasherState.cardSubline(
+                                            it,
+                                            viewModel.boundWasherUpdatedAtMs[device.snCode] ?: 0L,
+                                            drawerNowMs
+                                        )
+                                    } ?: "读取中…",
+                                    fontSize = 11.sp,
+                                    fontFamily = homeBody,
+                                    color = sheetInkSecondary,
+                                    maxLines = 1,
+                                    overflow = TextOverflow.Ellipsis
+                                )
+                            }
+                            Text("›", fontSize = 15.sp, color = sheetChevron)
+                        }
+                    }
                 }
                 Spacer(Modifier.height(4.dp))
                 Box(
