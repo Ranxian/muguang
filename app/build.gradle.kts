@@ -34,8 +34,8 @@ android {
         applicationId = "io.github.ranxian.muguang"
         minSdk = 26
         targetSdk = 36
-        // 版本号统一为「1.0 正式公测版」：之前 1.2.x 是内部迭代编号，不对外。
-        // versionCode 必须继续单调递增（1.2.1 = 4），否则装不回已经装了内测版的机器。
+        // 对外版本号只有 1.0 一个，历史内部编号不再出现。
+        // versionCode 必须继续单调递增（内部试构建用过 1~5），否则装不回已经装了内测版的机器。
         versionCode = 6
         versionName = "1.0"
 

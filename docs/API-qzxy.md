@@ -37,9 +37,9 @@
 | 钱包余额 | GET | `/account/wallet` | ✅ | 获取趣智校园钱包余额 |
 | 设备信息 | GET | `/device/info/mac` | ✅ | 通过 MAC 地址获取设备详情 |
 | 开始洗澡 | POST | `/order/tcpDevice/downRate/rateOrder` | ✅ | 开启热水器 |
-| 开阀结果确认 | POST | `/order/tcpDevice/query/downRateResult` | ✅ | 确认开阀是否成功，**`orderNo` 在这里就能拿到**（v1.2.0 新增，v3.0.3 修正）|
+| 开阀结果确认 | POST | `/order/tcpDevice/query/downRateResult` | ✅ | 确认开阀是否成功，**`orderNo` 在这里就能拿到**（早期迭代补入，v3.0.3 实测修正）|
 | 停止洗澡 | POST | `/order/tcpDevice/closeOrder` | ✅ | 关闭热水器 |
-| 关阀结果确认 | POST | `/order/tcpDevice/closeOrder/result/query` | ✅ | 确认关阀是否成功。实测 `data` 恒为 `null`（v1.2.0 新增）|
+| 关阀结果确认 | POST | `/order/tcpDevice/closeOrder/result/query` | ✅ | 确认关阀是否成功。实测 `data` 恒为 `null`（早期迭代补入）|
 | 消费结果查询 | POST | `/order/consumeOrder/result/query` | ✅ | 查询消费结算结果。⚠️ `consumeMoney` 单位是**厘**，见 [4.11](#411-消费结果查询) |
 | 查询进行中 | POST | `/order/tcpDevice/query/rateOrder/using` | ✅ | 查询设备是否有进行中的订单 |
 | 账单列表 | GET | `/order/query/account/bill/list` | ✅ | 获取月度账单 |
