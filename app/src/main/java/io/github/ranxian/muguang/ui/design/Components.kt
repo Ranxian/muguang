@@ -19,8 +19,11 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.animation.core.Animatable
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
+import kotlinx.coroutines.currentCoroutineContext
+import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import androidx.compose.animation.core.animateDpAsState
 import androidx.compose.foundation.layout.offset
@@ -323,6 +326,12 @@ fun RadarProbe(
     /** 外部驱动的自动旋转信号（值变化即转三圈并触发探测），如抽屉展开 */
     autoSpinKey: Int = 0,
     /**
+     * 外部点击带动的旋转信号（值变化即转，**不**触发 onProbeStart——
+     * 扫描由调用方自己发起）。给「整条横带可点」的行用：点行内空白处
+     * 也要让球转起来，不然扫描在跑、雷达却停着。
+     */
+    spinRequest: Int = 0,
+    /**
      * 图标下方那行 9sp 说明文字。默认显示；
      * 抽屉那类「左侧图标 + 右侧标题」的行里已经有标题了，再挂一行会和标题重复
      * （扫描时两处都写「探测中…」），此时传 false。
@@ -332,6 +341,9 @@ fun RadarProbe(
     val angle = remember { Animatable(0f) }
     val scope = rememberCoroutineScope()
     var spinning by remember { mutableStateOf(false) }
+    // spin() 的协程要读「此刻还在不在探测」的**最新**值，
+    // 直接捕获参数会把启动那一瞬间的布尔值冻结到动画结束
+    val scanningNow by rememberUpdatedState(scanning)
     fun spin(onStart: () -> Unit = {}) {
         if (spinning) return
         spinning = true
@@ -343,10 +355,17 @@ fun RadarProbe(
                 tween(2400, easing = CubicBezierEasing(0.33f, 1f, 0.68f, 1f))
             )
             angle.snapTo(angle.value % 360f)
+            // 冲量三圈转完、探测还在进行就接着慢转：标签挂着「探测中…」
+            // 雷达却停住，看着像卡死。探测结束（scanningNow=false）即停。
+            while (currentCoroutineContext().isActive && scanningNow) {
+                angle.animateTo(angle.value + 360f, tween(1300, easing = LinearEasing))
+                angle.snapTo(angle.value % 360f)
+            }
             spinning = false
         }
     }
     LaunchedEffect(autoSpinKey) { if (autoSpinKey > 0) spin(onProbeStart) }
+    LaunchedEffect(spinRequest) { if (spinRequest > 0) spin() }
 
     // 触控下限 48dp：雷达图形和说明文字尺寸不变，只把热区补够
     Box(

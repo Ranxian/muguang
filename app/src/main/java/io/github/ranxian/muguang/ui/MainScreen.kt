@@ -931,13 +931,19 @@ private fun P1HomeDrawer(
             ) {
                 // 探测行：雷达 + 「探测」标题左对齐一行；展开抽屉自动转三圈并触发扫描。
                 // 触控热区给整行（48dp 下限）：雷达本体只有 22dp，瞄准它点太费眼——
-                // 这条横带里点哪儿都算探测，雷达只是视觉锚点
+                // 这条横带里点哪儿都算探测，雷达只是视觉锚点。
+                // 行点击要同时 bump spinSignal：扫描由 onScanStart 发起，
+                // 球的动画由 spinSignal 驱动——只发扫描不转球，就是「探测中了球不转」
+                var bandSpinSignal by remember { mutableStateOf(0) }
                 if (collapsedOffset - offsetPx > 120f) {
                     Row(
                         Modifier
                             .fillMaxWidth()
                             .heightIn(min = 48.dp)
-                            .clickable(onClick = onScanStart)
+                            .clickable {
+                                bandSpinSignal++
+                                onScanStart()
+                            }
                             .padding(horizontal = 22.dp, vertical = 10.dp),
                         verticalAlignment = Alignment.CenterVertically
                     ) {
@@ -946,6 +952,7 @@ private fun P1HomeDrawer(
                             onProbeStart = onScanStart,
                             size = 22.dp,
                             autoSpinKey = openCount,
+                            spinRequest = bandSpinSignal,
                             // 右边这行标题已经写了状态，雷达底下再挂一行会重复
                             showCaption = false,
                         )
