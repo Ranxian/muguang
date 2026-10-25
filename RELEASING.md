@@ -28,20 +28,20 @@ base64 -w0 ../keys/muguang-release.jks > keystore.b64
 | `KEY_ALIAS` | 密钥别名（当前为 `muguang`） |
 | `KEY_PASSWORD` | 密钥密码 |
 | `GITEE_TOKEN` | 可选。Gitee 私人令牌，勾 `projects` 权限。不填则只发 GitHub |
-| `GITEE_OWNER` | 可选，默认 `Ranxian` |
+| `GITEE_OWNER` | 可选，默认 `dyed-string` |
 | `GITEE_REPO` | 可选，默认 `muguang` |
 
 ### 3. 仓库与镜像
 
 - GitHub：`https://github.com/Ranxian/muguang`
-- Gitee 镜像：`https://gitee.com/Ranxian/muguang`（Gitee 仓库需先在网页上建好，并推一次 `main`）
+- Gitee 镜像：`https://gitee.com/dyed-string/muguang`（仓库已建好；`main` 与 tag 需推一次）
 
 远端已配好：
 
 ```bash
 git remote -v
 # origin  https://github.com/Ranxian/muguang.git
-# gitee   https://gitee.com/Ranxian/muguang.git
+# gitee   https://gitee.com/dyed-string/muguang.git
 ```
 
 首次推送：

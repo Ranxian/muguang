@@ -60,7 +60,7 @@ class UpdateApiParseTest {
     fun `下载优先镜像、回落原链`() {
         val r = parseGithubRelease(releaseJson)!!
         assertEquals(
-            "https://gitee.com/Ranxian/muguang/releases/download/v1.2.0/muguang-1.2.0-arm64-v8a.apk",
+            "https://gitee.com/dyed-string/muguang/releases/download/v1.2.0/muguang-1.2.0-arm64-v8a.apk",
             r.directApkUrl
         )
         assertEquals(
@@ -119,7 +119,7 @@ class UpdateApiParseTest {
         assertEquals("muguang-1.2.0-arm64-v8a.apk", r.apkAsset?.name)
         assertEquals(19543058L, r.apkAsset?.sizeBytes)
         assertEquals(
-            "https://gitee.com/Ranxian/muguang/releases/download/v1.2.0/muguang-1.2.0-arm64-v8a.apk",
+            "https://gitee.com/dyed-string/muguang/releases/download/v1.2.0/muguang-1.2.0-arm64-v8a.apk",
             r.directApkUrl
         )
         assertEquals(

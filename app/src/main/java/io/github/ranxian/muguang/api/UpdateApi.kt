@@ -22,7 +22,7 @@ private const val FEED_REPO = "Ranxian/muguang"
  * `objects.githubusercontent.com`，实测只有约 100 KB/s；Gitee 约 2 MB/s。
  * 检查更新本身不经过这里，所以镜像没同步时也能正常提示有新版本。
  */
-private const val MIRROR_REPO = "Ranxian/muguang"
+private const val MIRROR_REPO = "dyed-string/muguang"
 
 /** 发行版里的一个附件（这里主要用 APK） */
 data class UpdateAsset(
