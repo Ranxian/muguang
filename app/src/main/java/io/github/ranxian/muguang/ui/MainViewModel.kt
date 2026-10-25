@@ -9,6 +9,8 @@ import androidx.compose.runtime.setValue
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import io.github.ranxian.muguang.api.NetworkModule
+import io.github.ranxian.muguang.api.UpdateApi
+import io.github.ranxian.muguang.api.UpdateRelease
 import io.github.ranxian.muguang.api.getAccountInfoSafe
 import io.github.ranxian.muguang.api.getBillListSafe
 import io.github.ranxian.muguang.api.getBindCardInfoSafe
@@ -65,6 +67,7 @@ import io.github.ranxian.muguang.utils.AppLogger
 import io.github.ranxian.muguang.utils.BluetoothScanner
 import io.github.ranxian.muguang.utils.MqttManager
 import io.github.ranxian.muguang.utils.Notifier
+import io.github.ranxian.muguang.utils.ApkUpdater
 import io.github.ranxian.muguang.utils.PrefsHelper
 import com.google.gson.Gson
 import kotlinx.coroutines.CancellationException
@@ -108,6 +111,45 @@ enum class ShowerErrorKind {
 data class ShowerError(val message: String, val kind: ShowerErrorKind)
 
 class MainViewModel : ViewModel() {
+
+    // ── 启动时的静默更新检查 ──
+    //
+    // 只有进「设置 → 应用信息」才检测的话，绝大多数人永远看不到新版本：
+    // 没人会为了「看看有没有更新」专门翻到那一页。所以启动后自动查一次，
+    // 有新版本直接弹窗，用户当场就能装。
+    //
+    // 节流到 12 小时：GitHub 的未认证 API 每小时只有 60 次额度，
+    // 每启动一次就查一次会把它打光。
+
+    /** 检查到的新版本；非 null 即弹窗正在显示 */
+    var pendingUpdate by mutableStateOf<UpdateRelease?>(null)
+        private set
+
+    fun checkUpdateIfDue(force: Boolean = false) {
+        if (!UpdateApi.configured) return
+        if (pendingUpdate != null) return
+        if (ApkUpdater.isDownloading) return
+        val now = System.currentTimeMillis()
+        if (!force) {
+            val last = PrefsHelper.lastUpdateCheckAt
+            if (last > 0 && now - last < UPDATE_CHECK_INTERVAL_MS) return
+        }
+        viewModelScope.launch {
+            val releases = UpdateApi.fetchReleases()
+            PrefsHelper.lastUpdateCheckAt = now
+            val latest = releases.firstOrNull { !it.prerelease } ?: return@launch
+            if (!ApkUpdater.isNewer(latest.tagName, ApkUpdater.currentVersion)) return@launch
+            if (latest.tagName == PrefsHelper.skippedUpdateTag) return@launch
+            pendingUpdate = latest
+        }
+    }
+
+    /** 关掉弹窗。[skipVersion] 为真时记下这个 tag，以后不再为它弹 */
+    fun dismissUpdatePrompt(skipVersion: Boolean) {
+        val tag = pendingUpdate?.tagName
+        if (skipVersion && tag != null) PrefsHelper.skippedUpdateTag = tag
+        pendingUpdate = null
+    }
 
     var walletInfo by mutableStateOf<WalletData?>(null)
     val nearbyDevices = mutableStateListOf<NearbyDevice>()
@@ -3010,6 +3052,9 @@ class MainViewModel : ViewModel() {
     companion object {
         /** 被另一个代扣挡住时给用户的说法 */
         const val BUSY_MESSAGE = "正在处理另一笔代扣，请稍候"
+
+        /** 静默检查新版本的节流窗口。12 小时既够及时，又不会把 GitHub API 额度打光 */
+        private const val UPDATE_CHECK_INTERVAL_MS = 12L * 60 * 60 * 1000
 
         /**
          * 事后对账补发通知的时间窗。

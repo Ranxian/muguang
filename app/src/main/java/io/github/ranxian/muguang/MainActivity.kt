@@ -37,6 +37,7 @@ import io.github.ranxian.muguang.ui.MuguangToast
 import io.github.ranxian.muguang.ui.LoginScreen
 import io.github.ranxian.muguang.ui.MainScreen
 import io.github.ranxian.muguang.ui.MainViewModel
+import io.github.ranxian.muguang.ui.UpdatePromptDialog
 import io.github.ranxian.muguang.ui.UserScreen
 import io.github.ranxian.muguang.ui.WalletScreen
 import io.github.ranxian.muguang.ui.theme.AppColors
@@ -149,6 +150,12 @@ class MainActivity : ComponentActivity() {
                     if (mainViewModel.kickedOut && !showKickedDialog && isLoggedIn) {
                         showKickedDialog = true
                     }
+                }
+
+                // 启动时静默查一次新版本（12 小时内不重复查）。
+                // 放在登录之后：登录页上弹更新框会挡住验证码，且没登录时用户也不急着更。
+                LaunchedEffect(isLoggedIn) {
+                    if (isLoggedIn) mainViewModel.checkUpdateIfDue()
                 }
 
                 // 登录后启动挤号心跳；退到后台就停，避免一直在后台轮询耗电。
@@ -264,6 +271,15 @@ class MainActivity : ComponentActivity() {
                                     isLoggedIn = false
                                 }, modifier = Modifier.fillMaxWidth()) { Text("确定") }
                             }
+                        )
+                    }
+
+                    // 新版本提示：被挤号弹窗压着时先不显示，免得两层对话框叠在一起
+                    val update = mainViewModel.pendingUpdate
+                    if (update != null && !showKickedDialog) {
+                        UpdatePromptDialog(
+                            release = update,
+                            onDismiss = { skipVersion -> mainViewModel.dismissUpdatePrompt(skipVersion) }
                         )
                     }
 

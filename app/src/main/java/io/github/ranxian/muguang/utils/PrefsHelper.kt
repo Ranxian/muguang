@@ -345,6 +345,11 @@ object PrefsHelper {
     var userSettingsHiddenCards: String get() = prefs.getString("userSettingsHiddenCards", "") ?: ""; set(v) = prefs.edit().putString("userSettingsHiddenCards", v).apply()
     /** 卡片布局版本：改默认顺序时 +1，老存档据此做一次性迁移 */
     var userCardLayoutVersion: Int get() = prefs.getInt("userCardLayoutVersion", 1); set(v) = prefs.edit().putInt("userCardLayoutVersion", v).apply()
+    // ── 启动时的静默更新检查 ──
+    /** 上次检查更新的时间戳（毫秒）。用来做节流，别每次冷启动都打 GitHub API */
+    var lastUpdateCheckAt: Long get() = prefs.getLong("lastUpdateCheckAt", 0L); set(v) = prefs.edit().putLong("lastUpdateCheckAt", v).apply()
+    /** 用户点了「跳过此版本」的 tag，同一个版本不再弹 */
+    var skippedUpdateTag: String get() = prefs.getString("skippedUpdateTag", "") ?: ""; set(v) = prefs.edit().putString("skippedUpdateTag", v).apply()
 
     // ── 自定义背景：两套独立配置（scope = home / shower），与深浅模式完全无关 ──
     fun bgGetBool(scope: String, name: String, def: Boolean) = prefs.getBoolean("bg_${scope}_$name", def)

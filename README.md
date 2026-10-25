@@ -1,6 +1,6 @@
 # 沐光 (Muguang)
 
-> 沐光 Muguang · Android（Kotlin / Jetpack Compose）· v1.2.1 · MIT
+> 沐光 Muguang · Android（Kotlin / Jetpack Compose）· v1.0 正式公测版 · MIT
 
 校园热水与洗衣的 Android 客户端。用来启停热水、查看绑定洗衣机的实时状态、看账单与余额。
 
@@ -16,7 +16,8 @@
 - **桌面小组件**：1×1 / 2×2 / 2×4，直接启停
 - **背景装扮**：自定义背景图，自动取主题色作为强调色
 - **界面风格**：四套并列的视觉语言 × 日夜双模，设置页随时切换
-- **检查更新**：读 GitHub Releases 判断版本，下载优先走 Gitee 镜像、失败回落原链
+- **检查更新**：登录后自动静默检查 GitHub Releases（12 小时一次），有新版本弹窗提示，
+  可在应用内直接下载安装；下载优先走 Gitee 镜像、失败回落原链
 
 ## 界面风格
 

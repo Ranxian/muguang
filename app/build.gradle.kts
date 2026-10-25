@@ -34,8 +34,10 @@ android {
         applicationId = "io.github.ranxian.muguang"
         minSdk = 26
         targetSdk = 36
-        versionCode = 5
-        versionName = "1.2.2"
+        // 版本号统一为「1.0 正式公测版」：之前 1.2.x 是内部迭代编号，不对外。
+        // versionCode 必须继续单调递增（1.2.1 = 4），否则装不回已经装了内测版的机器。
+        versionCode = 6
+        versionName = "1.0"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
         vectorDrawables {

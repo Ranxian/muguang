@@ -88,6 +88,19 @@ jobs:
           fi
           OUT="muguang-$VERSION-arm64-v8a.apk"
           cp app/build/outputs/apk/release/app-release.apk "$OUT"
+          # 发行说明直接取 CHANGELOG 里对应版本那一节：应用内更新弹窗显示的就是这段，
+          # 手写一份放在 workflow 里迟早和 CHANGELOG 对不上。
+          {
+            echo "沐光 MUGUANG v$VERSION（arm64-v8a，Android 8.0+）"
+            echo
+            echo "安装包：\`$OUT\`"
+            echo
+            awk -v ver="$VERSION" \
+              '$0 ~ "^## " ver "([^0-9.]|$)" { f=1; next } f && /^## / { exit } f { print }' \
+              CHANGELOG.md
+            echo
+            echo "> 更新检查走 GitHub Releases；应用内下载优先走 Gitee 镜像，失败自动回落到本页附件。"
+          } > release-notes.md
           echo "name=$OUT" >> "$GITHUB_OUTPUT"
           echo "version=$VERSION" >> "$GITHUB_OUTPUT"
           sha256sum "$OUT" | tee "$OUT.sha256"
@@ -99,13 +112,7 @@ jobs:
           tag_name: ${{ github.ref_name }}
           draft: false
           prerelease: ${{ contains(github.ref_name, '-rc') || contains(github.ref_name, '-beta') }}
-          generate_release_notes: true
-          body: |
-            沐光 MUGUANG v${{ steps.stage.outputs.version }}（arm64-v8a，Android 8.0+）
-
-            安装包：`${{ steps.stage.outputs.name }}`
-
-            > 更新检查走 GitHub Releases API；应用内下载优先走 Gitee 镜像，失败自动回落到本页附件。
+          body_path: release-notes.md
           files: |
             ${{ steps.stage.outputs.name }}
             ${{ steps.stage.outputs.name }}.sha256
