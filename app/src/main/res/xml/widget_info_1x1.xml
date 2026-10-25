@@ -1,0 +1,21 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  1x1：默认 40dp（一格宽 × 一格高）。**不给 resize**——
+  这个尺寸存在的意义就是"最省地方"，拉大了不如去用 2x2。
+
+  · updatePeriodMillis 设 0：系统最小也才 30 分钟，对"启停状态"没意义。
+    刷新完全交给「用户点按」和「App 内状态变化时主动 push」两条路径。
+  · 这里**故意不写 previewLayout**：写了的话 API 31+ 的桌面会用真实布局当预览，
+    previewImage 就被架空了。用户特意画了这张预览图，得让它在所有版本上都生效。
+-->
+<appwidget-provider xmlns:android="http://schemas.android.com/apk/res/android"
+    android:minWidth="40dp"
+    android:minHeight="40dp"
+    android:targetCellWidth="1"
+    android:targetCellHeight="1"
+    android:resizeMode="none"
+    android:updatePeriodMillis="0"
+    android:initialLayout="@layout/widget_muguang_1x1"
+    android:previewImage="@drawable/widget_preview_1x1"
+    android:description="@string/widget_1x1_description"
+    android:widgetCategory="home_screen" />

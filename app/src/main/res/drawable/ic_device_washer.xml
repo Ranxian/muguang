@@ -1,0 +1,15 @@
+<!--
+  洗衣机设备图标（单色，tint 上色）。
+  形状 = 圆角机身 + evenOdd 挖出舱门圆与顶部两个旋钮点。
+  与 ic_device_shower / ic_device_sink 同一套 24dp 视觉密度。
+-->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="24dp"
+    android:height="24dp"
+    android:viewportWidth="24"
+    android:viewportHeight="24">
+    <path
+        android:fillColor="#FFFFFFFF"
+        android:fillType="evenOdd"
+        android:pathData="M6,2 h12 c1.66,0 3,1.34 3,3 v14 c0,1.66 -1.34,3 -3,3 H6 c-1.66,0 -3,-1.34 -3,-3 V5 c0,-1.66 1.34,-3 3,-3 z M12,9.2 a4.8,4.8 0 1 0 0,9.6 a4.8,4.8 0 1 0 0,-9.6 z M8.2,4.6 a1.3,1.3 0 1 0 0.001,0 z M15.8,4.6 a1.3,1.3 0 1 0 0.001,0 z" />
+</vector>

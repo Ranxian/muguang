@@ -1,0 +1,13 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  ⚠️ 仅 debug 源集：给「未登录也能看的两页」做真机取色回归用。
+  release 不合并这份清单，PreviewActivity 也不会进正式包。
+-->
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+    <application>
+        <activity
+            android:name=".debug.PreviewActivity"
+            android:exported="true"
+            android:theme="@style/Theme.Muguang" />
+    </application>
+</manifest>

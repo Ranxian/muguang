@@ -1,0 +1,11 @@
+<resources xmlns:tools="http://schemas.android.com/tools">
+    <style name="Theme.Muguang" parent="Theme.MaterialComponents.DayNight.NoActionBar">
+        <item name="colorPrimary">#2563EB</item>
+        <item name="colorPrimaryVariant">#1D4ED8</item>
+        <item name="colorOnPrimary">@color/white</item>
+        <item name="colorSecondary">#6B7280</item>
+        <item name="colorSecondaryVariant">#4B5563</item>
+        <item name="colorOnSecondary">@color/white</item>
+        <item name="android:statusBarColor">?attr/colorPrimaryVariant</item>
+    </style>
+</resources>

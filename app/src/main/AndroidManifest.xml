@@ -1,0 +1,185 @@
+<?xml version="1.0" encoding="utf-8"?>
+<manifest xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:tools="http://schemas.android.com/tools">
+
+    <uses-permission android:name="android.permission.INTERNET" />
+    <uses-permission
+        android:name="android.permission.BLUETOOTH"
+        android:maxSdkVersion="30" />
+    <!--
+      ⚠️ 源码里没有 adapter.enable()/startDiscovery()，但这里**不能删**：
+      Android 12 之前系统对 BluetoothLeScanner.startScan/stopScan 要求的是
+      BLUETOOTH_ADMIN 而不是 BLUETOOTH_SCAN（后者 API 31 才存在）。
+      删掉之后 API 26~30 的设备一扫描就抛 SecurityException。
+    -->
+    <uses-permission
+        android:name="android.permission.BLUETOOTH_ADMIN"
+        android:maxSdkVersion="30" />
+    <!--
+      neverForLocation：声明本应用不会用蓝牙扫描结果推导物理位置。
+      App 只用扫描结果拿设备 MAC 地址，从不读取、不上报任何位置信息。
+      有了这个声明，Android 12+ 上只需要「附近的设备」权限，完全不碰定位权限。
+    -->
+    <uses-permission
+        android:name="android.permission.BLUETOOTH_SCAN"
+        android:usesPermissionFlags="neverForLocation"
+        tools:targetApi="s" />
+    <uses-permission android:name="android.permission.BLUETOOTH_CONNECT" />
+    <!--
+      Android 11 及以下：系统的蓝牙发现（含 BLE）强制要求定位权限，绕不开，
+      所以这里限定只在 API ≤30 上申请，Android 12+ 不再出现在权限列表里。
+    -->
+    <uses-permission
+        android:name="android.permission.ACCESS_FINE_LOCATION"
+        android:maxSdkVersion="30" />
+    <uses-permission
+        android:name="android.permission.ACCESS_COARSE_LOCATION"
+        android:maxSdkVersion="30" />
+    <uses-permission android:name="android.permission.CAMERA" />
+    <!--
+      蓝牙是扫描/开阀的核心能力，但没有 BLE 硬件的设备也应当能安装——
+      那种设备只是扫不到蓝牙设备、用不了蓝牙表，云端功能仍可用。
+      required=false 同时避免被应用商店按硬件特性过滤掉。
+    -->
+    <uses-feature
+        android:name="android.hardware.bluetooth_le"
+        android:required="false" />
+    <uses-feature
+        android:name="android.hardware.camera"
+        android:required="false" />
+    <!-- 应用内下载更新包后调起系统安装器（Android 8.0+ 还需用户在设置里单独开启） -->
+    <uses-permission android:name="android.permission.REQUEST_INSTALL_PACKAGES" />
+
+    <!--
+      用水监控服务。用途是「用水期间盯着订单状态，超时或被关掉时及时清理界面状态并提醒」，
+      不属于 Android 预置的任何一类前台服务，所以用 specialUse。
+      Android 14+ 要求声明具体用途（见下面 service 里的 property）。
+    -->
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
+    <uses-permission
+        android:name="android.permission.FOREGROUND_SERVICE_SPECIAL_USE"
+        tools:targetApi="34" />
+    <!--
+      Android 13+ 的运行时通知权限。用户在「我的 → 通知」里能看到状态，
+      拒绝了也不影响 App 主体功能，只是收不到提醒。
+    -->
+    <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+
+    <application
+        android:allowBackup="true"
+        android:dataExtractionRules="@xml/data_extraction_rules"
+        android:fullBackupContent="@xml/backup_rules"
+        android:icon="@mipmap/ic_launcher"
+        android:label="@string/app_name"
+        android:networkSecurityConfig="@xml/network_security_config"
+        android:roundIcon="@mipmap/ic_launcher_round"
+        android:supportsRtl="true"
+        android:theme="@style/Theme.Muguang">
+
+        <activity
+            android:name=".MainActivity"
+            android:exported="true"
+            android:theme="@style/Theme.Muguang">
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+                <category android:name="android.intent.category.LAUNCHER" />
+            </intent-filter>
+        </activity>
+
+        <activity
+            android:name=".QrScanActivity"
+            android:exported="false"
+            android:screenOrientation="portrait" />
+
+        <!--
+          桌面小组件：1x1 / 2x2 / 2x4 各注册一个，共用同一个 Provider 基类的逻辑。
+
+          ⚠️ 每个 receiver 的 intent-filter 都要把 ACTION_START / STOP / REFRESH 列全。
+          广播是靠 action 找 receiver 的，漏掉哪个，那个尺寸的组件点了就没反应。
+        -->
+        <receiver
+            android:name=".widget.MuguangWidget1x1"
+            android:exported="false"
+            android:label="@string/app_name">
+            <intent-filter>
+                <action android:name="android.appwidget.action.APPWIDGET_UPDATE" />
+                <action android:name="io.github.ranxian.muguang.widget.ACTION_START" />
+                <action android:name="io.github.ranxian.muguang.widget.ACTION_STOP" />
+                <action android:name="io.github.ranxian.muguang.widget.ACTION_REFRESH" />
+            </intent-filter>
+            <meta-data
+                android:name="android.appwidget.provider"
+                android:resource="@xml/widget_info_1x1" />
+        </receiver>
+
+        <receiver
+            android:name=".widget.MuguangWidget2x2"
+            android:exported="false"
+            android:label="@string/app_name">
+            <intent-filter>
+                <action android:name="android.appwidget.action.APPWIDGET_UPDATE" />
+                <action android:name="io.github.ranxian.muguang.widget.ACTION_START" />
+                <action android:name="io.github.ranxian.muguang.widget.ACTION_STOP" />
+                <action android:name="io.github.ranxian.muguang.widget.ACTION_REFRESH" />
+            </intent-filter>
+            <meta-data
+                android:name="android.appwidget.provider"
+                android:resource="@xml/widget_info_2x2" />
+        </receiver>
+
+        <receiver
+            android:name=".widget.MuguangWidget2x4"
+            android:exported="false"
+            android:label="@string/app_name">
+            <intent-filter>
+                <action android:name="android.appwidget.action.APPWIDGET_UPDATE" />
+                <action android:name="io.github.ranxian.muguang.widget.ACTION_START" />
+                <action android:name="io.github.ranxian.muguang.widget.ACTION_STOP" />
+                <action android:name="io.github.ranxian.muguang.widget.ACTION_REFRESH" />
+            </intent-filter>
+            <meta-data
+                android:name="android.appwidget.provider"
+                android:resource="@xml/widget_info_2x4" />
+        </receiver>
+
+        <!--
+          用水监控。跟界面完全解耦：App 退到后台、甚至被划掉，它照样能发现
+          「设备已经不是使用中」并清理状态——否则小组件会一直卡在「使用中」。
+
+          specialUse 需要写清楚用途，Android 14+ 上架会被审核这一条
+          （本项目不在应用商店分发，但清单里仍然如实填写）。
+        -->
+        <service
+            android:name=".service.ShowerWatchService"
+            android:exported="false"
+            android:foregroundServiceType="specialUse"
+            android:stopWithTask="false">
+            <property
+                android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE"
+                android:value="用水期间监控订单状态，以便设备超时自动关停或被外部关闭时及时清理界面状态并提醒用户" />
+        </service>
+
+        <!-- 小组件的蓝牙表开/关阀：RemoteViews 自身做不了 BLE，交给这个前台服务 -->
+        <service
+            android:name=".service.WidgetBleService"
+            android:exported="false"
+            android:foregroundServiceType="specialUse"
+            android:stopWithTask="false">
+            <property
+                android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE"
+                android:value="在桌面小组件上直接开/关蓝牙水表：连接设备并下发费率或关阀指令，完成后同步状态" />
+        </service>
+
+        <!-- 日志导出用 FileProvider -->
+        <provider
+            android:name="androidx.core.content.FileProvider"
+            android:authorities="${applicationId}.fileprovider"
+            android:exported="false"
+            android:grantUriPermissions="true">
+            <meta-data
+                android:name="android.support.FILE_PROVIDER_PATHS"
+                android:resource="@xml/file_paths" />
+        </provider>
+    </application>
+
+</manifest>

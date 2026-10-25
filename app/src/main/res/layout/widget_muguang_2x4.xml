@@ -1,0 +1,818 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  2x4 小组件— v6
+  左侧图标导航（三个 tab 按权重均分整列）+ 右侧主视口（三页叠放靠 visibility 切换）
+
+  · 头部整行铺满，状态胶囊贴最右——上一版把按钮放在右上角，胶囊被挤到按钮左边很难看
+  · 主体是「卡片在左 + 按钮在右」，按钮拉满主体高度
+  · 胶囊按钮只有图标（drawableStart），没有文字
+  · 设备名 autoSizeTextType 自适应：系统字体调大时缩小字号，而不是截断
+  · 附近设备 / 账单是 App 上次同步的快照，读不到时给出明确原因
+  · 分隔线用 LinearLayout 而非 <View>：RemoteViews 对可 inflate 的 View 类型有白名单
+-->
+<FrameLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:tools="http://schemas.android.com/tools"
+    tools:ignore="UseAppTint"
+    android:id="@+id/widget_root"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    android:background="@drawable/widget_glass">
+
+    <LinearLayout
+        android:layout_width="match_parent"
+        android:layout_height="match_parent"
+        android:orientation="horizontal">
+
+        <LinearLayout
+            android:layout_width="48dp"
+            android:layout_height="match_parent"
+            android:orientation="vertical"
+            android:paddingTop="6dp"
+            android:paddingBottom="6dp">
+
+                <FrameLayout
+                    android:layout_width="match_parent"
+                    android:layout_height="0dp"
+                    android:layout_weight="1">
+
+                    <ImageView
+                        android:id="@+id/widget_tab0_on"
+                        android:layout_width="38dp"
+                        android:layout_height="38dp"
+                        android:layout_gravity="center"
+                        android:background="@drawable/widget_nav_active"
+                        android:src="@drawable/ic_widget_clock"
+                        android:tint="#FFFFFF"
+                        android:padding="10dp"
+                        android:contentDescription="常用控制" />
+
+                    <ImageView
+                        android:id="@+id/widget_tab0_off"
+                        android:layout_width="38dp"
+                        android:layout_height="38dp"
+                        android:layout_gravity="center"
+                        android:src="@drawable/ic_widget_clock"
+                        android:tint="#D1FFFFFF"
+                        android:padding="10dp"
+                        android:contentDescription="常用控制" />
+                </FrameLayout>
+                <FrameLayout
+                    android:layout_width="match_parent"
+                    android:layout_height="0dp"
+                    android:layout_weight="1">
+
+                    <ImageView
+                        android:id="@+id/widget_tab1_on"
+                        android:layout_width="38dp"
+                        android:layout_height="38dp"
+                        android:layout_gravity="center"
+                        android:background="@drawable/widget_nav_active"
+                        android:src="@drawable/ic_widget_bluetooth"
+                        android:tint="#FFFFFF"
+                        android:padding="10dp"
+                        android:contentDescription="附近设备" />
+
+                    <ImageView
+                        android:id="@+id/widget_tab1_off"
+                        android:layout_width="38dp"
+                        android:layout_height="38dp"
+                        android:layout_gravity="center"
+                        android:src="@drawable/ic_widget_bluetooth"
+                        android:tint="#D1FFFFFF"
+                        android:padding="10dp"
+                        android:contentDescription="附近设备" />
+                </FrameLayout>
+                <FrameLayout
+                    android:layout_width="match_parent"
+                    android:layout_height="0dp"
+                    android:layout_weight="1">
+
+                    <ImageView
+                        android:id="@+id/widget_tab2_on"
+                        android:layout_width="38dp"
+                        android:layout_height="38dp"
+                        android:layout_gravity="center"
+                        android:background="@drawable/widget_nav_active"
+                        android:src="@drawable/ic_widget_card"
+                        android:tint="#FFFFFF"
+                        android:padding="10dp"
+                        android:contentDescription="账单记录" />
+
+                    <ImageView
+                        android:id="@+id/widget_tab2_off"
+                        android:layout_width="38dp"
+                        android:layout_height="38dp"
+                        android:layout_gravity="center"
+                        android:src="@drawable/ic_widget_card"
+                        android:tint="#D1FFFFFF"
+                        android:padding="10dp"
+                        android:contentDescription="账单记录" />
+                </FrameLayout>
+        </LinearLayout>
+
+        <LinearLayout
+            android:layout_width="1dp"
+            android:layout_height="match_parent"
+            android:orientation="vertical"
+            android:background="#29FFFFFF" />
+
+        <FrameLayout
+            android:layout_width="0dp"
+            android:layout_height="match_parent"
+            android:layout_weight="1"
+            android:padding="10dp">
+
+            <!-- ═══ 页面 1：常用设备 ═══ -->
+            <LinearLayout
+                android:id="@+id/widget_page0"
+                android:layout_width="match_parent"
+                android:layout_height="match_parent"
+                android:orientation="vertical">
+
+                <LinearLayout
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:orientation="horizontal"
+                    android:gravity="center_vertical">
+
+                    <TextView
+                        android:id="@+id/widget_status_dot"
+                        android:layout_width="wrap_content"
+                        android:layout_height="wrap_content"
+                        android:textSize="9sp"
+                        android:textColor="#22C55E"
+                        android:text="●" />
+
+                    <TextView
+                        android:id="@+id/widget_device"
+                        android:layout_width="0dp"
+                        android:layout_height="wrap_content"
+                        android:layout_weight="1"
+                        android:layout_marginStart="4dp"
+                        android:textSize="13sp"
+                        android:textStyle="bold"
+                        android:maxLines="1"
+                        android:singleLine="true"
+                        android:ellipsize="start"
+                        android:autoSizeTextType="uniform"
+                        android:autoSizeMinTextSize="9sp"
+                        android:autoSizeMaxTextSize="13sp"
+                        android:autoSizeStepGranularity="1sp"
+                        android:textColor="#FFFFFF"
+                        android:text="未绑定设备" />
+
+                    <FrameLayout
+                        android:layout_width="wrap_content"
+                        android:layout_height="wrap_content"
+                        android:layout_marginStart="4dp">
+
+                        <TextView
+                            android:id="@+id/widget_badge_idle"
+                            android:layout_width="wrap_content"
+                            android:layout_height="wrap_content"
+                            android:background="@drawable/widget_badge_idle"
+                            android:paddingStart="8dp"
+                            android:paddingEnd="8dp"
+                            android:paddingTop="2dp"
+                            android:paddingBottom="2dp"
+                            android:textSize="10sp"
+                            android:textStyle="bold"
+                            android:textColor="#F24ADE80"
+                            android:text="● 空闲" />
+
+                        <TextView
+                            android:id="@+id/widget_badge_using"
+                            android:layout_width="wrap_content"
+                            android:layout_height="wrap_content"
+                            android:background="@drawable/widget_badge_using"
+                            android:paddingStart="8dp"
+                            android:paddingEnd="8dp"
+                            android:paddingTop="2dp"
+                            android:paddingBottom="2dp"
+                            android:textSize="10sp"
+                            android:textStyle="bold"
+                            android:textColor="#60A5FA"
+                            android:text="● 使用中"
+                            android:visibility="gone" />
+
+                        <TextView
+                            android:id="@+id/widget_badge_occupied"
+                            android:layout_width="wrap_content"
+                            android:layout_height="wrap_content"
+                            android:background="@drawable/widget_badge_occupied"
+                            android:paddingStart="8dp"
+                            android:paddingEnd="8dp"
+                            android:paddingTop="2dp"
+                            android:paddingBottom="2dp"
+                            android:textSize="9.5sp"
+                            android:textStyle="bold"
+                            android:textColor="#F2FBBF24"
+                            android:text="● 占用中"
+                            android:visibility="gone" />
+                    </FrameLayout>
+                </LinearLayout>
+
+                <TextView
+                    android:id="@+id/widget_device_desc"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:layout_marginTop="1dp"
+                    android:paddingStart="12dp"
+                    android:textSize="9sp"
+                    android:maxLines="1"
+                    android:ellipsize="end"
+                    android:textColor="#ADFFFFFF"
+                    android:text="卫生间热水器" />
+
+                <LinearLayout
+                    android:layout_width="match_parent"
+                    android:layout_height="0dp"
+                    android:layout_weight="1"
+                    android:layout_marginTop="5dp"
+                    android:orientation="horizontal"
+                    android:gravity="center_vertical">
+
+                    <FrameLayout
+                        android:layout_width="0dp"
+                        android:layout_height="match_parent"
+                        android:layout_weight="1"
+                        android:background="@drawable/widget_inset">
+
+                        <LinearLayout
+                            android:id="@+id/widget_panel_idle"
+                            android:layout_width="match_parent"
+                            android:layout_height="match_parent"
+                            android:orientation="vertical"
+                            android:gravity="center">
+
+                            <TextView
+                                android:id="@+id/widget_panel_label"
+                                android:layout_width="wrap_content"
+                                android:layout_height="wrap_content"
+                                android:textSize="10sp"
+                                android:maxLines="1"
+                                android:textColor="#ADFFFFFF"
+                                android:text="上次消费" />
+
+                            <TextView
+                                android:id="@+id/widget_lastconsume"
+                                android:layout_width="wrap_content"
+                                android:layout_height="wrap_content"
+                                android:textSize="21sp"
+                                android:textStyle="bold"
+                                android:maxLines="1"
+                                android:fontFeatureSettings="tnum"
+                                android:textColor="#FFFFFF"
+                                android:text="¥ —" />
+                        </LinearLayout>
+
+                        <LinearLayout
+                            android:id="@+id/widget_panel_running"
+                            android:layout_width="match_parent"
+                            android:layout_height="match_parent"
+                            android:orientation="vertical"
+                            android:gravity="center"
+                            android:visibility="gone">
+
+                            <Chronometer
+                                android:id="@+id/widget_timer"
+                                android:layout_width="wrap_content"
+                                android:layout_height="wrap_content"
+                                android:textSize="23sp"
+                                android:textStyle="bold"
+                                android:maxLines="1"
+                                android:fontFeatureSettings="tnum"
+                                android:textColor="#FFFFFF"
+                                android:text="00:00" />
+
+                            <TextView
+                                android:id="@+id/widget_prededuct"
+                                android:layout_width="wrap_content"
+                                android:layout_height="wrap_content"
+                                android:textSize="10sp"
+                                android:textStyle="bold"
+                                android:maxLines="1"
+                                android:textColor="#ADFFFFFF"
+                                android:text="预扣 · ¥0.00" />
+                        </LinearLayout>
+
+            <LinearLayout
+                android:id="@+id/widget_panel_busy"
+                android:layout_width="match_parent"
+                android:layout_height="match_parent"
+                android:orientation="horizontal"
+                android:gravity="center"
+                android:visibility="gone">
+
+                <ProgressBar
+                    android:layout_width="20dp"
+                    android:layout_height="20dp"
+                    android:indeterminate="true"
+                    android:indeterminateTint="#FFFFFF" />
+
+                <TextView
+                    android:id="@+id/widget_busy_text"
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:layout_marginStart="8dp"
+                    android:textSize="12sp"
+                    android:textStyle="bold"
+                    android:textColor="#FFFFFF"
+                    android:text="正在开启…" />
+            </LinearLayout>
+                    </FrameLayout>
+
+                    <FrameLayout
+                        android:layout_width="86dp"
+                        android:layout_height="match_parent"
+                        android:layout_marginStart="10dp">
+
+                        <FrameLayout
+                android:id="@+id/widget_action_start"
+                android:layout_width="match_parent"
+                android:layout_height="match_parent"
+                android:background="@drawable/widget_btn_pill">
+
+                <ImageView
+                    android:layout_width="24dp"
+                    android:layout_height="24dp"
+                    android:layout_gravity="center"
+                    android:src="@drawable/ic_widget_power"
+                    android:tint="#FFFFFF"
+                    android:contentDescription="开始热水" />
+            </FrameLayout>
+
+                        <FrameLayout
+                android:id="@+id/widget_action_stop"
+                android:layout_width="match_parent"
+                android:layout_height="match_parent"
+                android:background="@drawable/widget_btn_stop">
+
+                <ImageView
+                    android:layout_width="24dp"
+                    android:layout_height="24dp"
+                    android:layout_gravity="center"
+                    android:src="@drawable/ic_widget_stop"
+                    android:tint="#FFFFFF"
+                    android:contentDescription="停止热水" />
+            </FrameLayout>
+                    </FrameLayout>
+                </LinearLayout>
+            </LinearLayout>
+
+            <!-- ═══ 页面 2：附近设备 ═══ -->
+            <LinearLayout
+                android:id="@+id/widget_page1"
+                android:layout_width="match_parent"
+                android:layout_height="match_parent"
+                android:orientation="vertical"
+                android:visibility="gone">
+
+                <LinearLayout
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:orientation="horizontal"
+                    android:gravity="center_vertical">
+
+                    <LinearLayout
+                        android:layout_width="0dp"
+                        android:layout_height="wrap_content"
+                        android:layout_weight="1"
+                        android:orientation="horizontal"
+                        android:gravity="center_vertical">
+
+                        <TextView
+                            android:layout_width="wrap_content"
+                            android:layout_height="wrap_content"
+                            android:textSize="11sp"
+                            android:textStyle="bold"
+                            android:textColor="#ADFFFFFF"
+                            android:text="附近设备" />
+
+                        <!-- 上次扫描距今多久。小组件扫不了蓝牙，不标出来会被当成实时数据 -->
+                        <TextView
+                            android:id="@+id/widget_near_synced"
+                            android:layout_width="wrap_content"
+                            android:layout_height="wrap_content"
+                            android:layout_marginStart="3dp"
+                            android:textSize="9sp"
+                            android:maxLines="1"
+                            android:textColor="#7AFFFFFF"
+                            android:text="（尚未扫描）" />
+                    </LinearLayout>
+
+                    <TextView
+                        android:layout_width="wrap_content"
+                        android:layout_height="wrap_content"
+                        android:textSize="9sp"
+                        android:textColor="#22C55E"
+                        android:text="●强" />
+
+                    <TextView
+                        android:layout_width="wrap_content"
+                        android:layout_height="wrap_content"
+                        android:layout_marginStart="5dp"
+                        android:textSize="9sp"
+                        android:textColor="#F59E0B"
+                        android:text="●中" />
+
+                    <TextView
+                        android:layout_width="wrap_content"
+                        android:layout_height="wrap_content"
+                        android:layout_marginStart="5dp"
+                        android:textSize="9sp"
+                        android:textColor="#EF4444"
+                        android:text="●弱" />
+                </LinearLayout>
+
+                <TextView
+                    android:id="@+id/widget_near_empty"
+                    android:layout_width="match_parent"
+                    android:layout_height="0dp"
+                    android:layout_weight="1"
+                    android:gravity="center"
+                    android:textSize="11sp"
+                    android:textColor="#ADFFFFFF"
+                    android:text="未扫描到附近设备"
+                    android:visibility="gone" />
+
+                <LinearLayout
+                    android:id="@+id/widget_near_list"
+                    android:layout_width="match_parent"
+                    android:layout_height="0dp"
+                    android:layout_weight="1"
+                    android:orientation="vertical">
+
+                    <LinearLayout
+                        android:layout_width="match_parent"
+                        android:layout_height="0dp"
+                        android:layout_weight="1"
+                        android:layout_marginTop="3dp"
+                        android:background="@drawable/widget_inset"
+                        android:orientation="horizontal"
+                        android:gravity="center_vertical"
+                        android:paddingStart="7dp"
+                        android:paddingEnd="7dp">
+
+                        <TextView
+                            android:id="@+id/widget_near0_emoji"
+                            android:layout_width="26dp"
+                            android:layout_height="26dp"
+                            android:background="@drawable/widget_avatar"
+                            android:gravity="center"
+                            android:textSize="13sp"
+                            android:text="🚿" />
+
+                        <LinearLayout
+                            android:layout_width="0dp"
+                            android:layout_height="wrap_content"
+                            android:layout_weight="1"
+                            android:layout_marginStart="7dp"
+                            android:orientation="vertical">
+
+                            <TextView
+                                android:id="@+id/widget_near0_name"
+                                android:layout_width="match_parent"
+                                android:layout_height="wrap_content"
+                                android:textSize="11sp"
+                                android:textStyle="bold"
+                                android:maxLines="1"
+                                android:singleLine="true"
+                                android:ellipsize="start"
+                                android:textColor="#FFFFFF"
+                                android:text="—" />
+
+                            <LinearLayout
+                                android:layout_width="match_parent"
+                                android:layout_height="wrap_content"
+                                android:orientation="horizontal"
+                                android:gravity="center_vertical">
+
+                                <TextView
+                                    android:id="@+id/widget_near0_desc"
+                                    android:layout_width="wrap_content"
+                                    android:layout_height="wrap_content"
+                                    android:textSize="9sp"
+                                    android:maxLines="1"
+                                    android:ellipsize="end"
+                                    android:textColor="#ADFFFFFF"
+                                    android:text="卫生间热水器" />
+
+                                <!-- 信号强度：跟在类型小字后面 -->
+                                <TextView
+                                    android:id="@+id/widget_near0_signal"
+                                    android:layout_width="wrap_content"
+                                    android:layout_height="wrap_content"
+                                    android:layout_marginStart="5dp"
+                                    android:textSize="11sp"
+                                    android:textColor="#22C55E"
+                                    android:text="●" />
+
+                                <!-- dB 数值：和 App 首页的「信号强度: -65 dBm」同一份数据 -->
+                                <TextView
+                                    android:id="@+id/widget_near0_rssi"
+                                    android:layout_width="wrap_content"
+                                    android:layout_height="wrap_content"
+                                    android:layout_marginStart="3dp"
+                                    android:textSize="9sp"
+                                    android:maxLines="1"
+                                    android:textColor="#ADFFFFFF"
+                                    android:text="— dBm" />
+                            </LinearLayout>
+                        </LinearLayout>
+
+                        <TextView
+                            android:id="@+id/widget_near0_pick"
+                            android:layout_width="wrap_content"
+                            android:layout_height="wrap_content"
+                            android:layout_marginStart="6dp"
+                            android:background="@drawable/widget_btn_pill"
+                            android:paddingStart="13dp"
+                            android:paddingEnd="13dp"
+                            android:paddingTop="5dp"
+                            android:paddingBottom="5dp"
+                            android:textSize="11sp"
+                            android:textStyle="bold"
+                            android:textColor="#FFFFFF"
+                            android:text="选用" />
+                    </LinearLayout>
+                    <LinearLayout
+                        android:layout_width="match_parent"
+                        android:layout_height="0dp"
+                        android:layout_weight="1"
+                        android:layout_marginTop="3dp"
+                        android:background="@drawable/widget_inset"
+                        android:orientation="horizontal"
+                        android:gravity="center_vertical"
+                        android:paddingStart="7dp"
+                        android:paddingEnd="7dp">
+
+                        <TextView
+                            android:id="@+id/widget_near1_emoji"
+                            android:layout_width="26dp"
+                            android:layout_height="26dp"
+                            android:background="@drawable/widget_avatar"
+                            android:gravity="center"
+                            android:textSize="13sp"
+                            android:text="🚿" />
+
+                        <LinearLayout
+                            android:layout_width="0dp"
+                            android:layout_height="wrap_content"
+                            android:layout_weight="1"
+                            android:layout_marginStart="7dp"
+                            android:orientation="vertical">
+
+                            <TextView
+                                android:id="@+id/widget_near1_name"
+                                android:layout_width="match_parent"
+                                android:layout_height="wrap_content"
+                                android:textSize="11sp"
+                                android:textStyle="bold"
+                                android:maxLines="1"
+                                android:singleLine="true"
+                                android:ellipsize="start"
+                                android:textColor="#FFFFFF"
+                                android:text="—" />
+
+                            <LinearLayout
+                                android:layout_width="match_parent"
+                                android:layout_height="wrap_content"
+                                android:orientation="horizontal"
+                                android:gravity="center_vertical">
+
+                                <TextView
+                                    android:id="@+id/widget_near1_desc"
+                                    android:layout_width="wrap_content"
+                                    android:layout_height="wrap_content"
+                                    android:textSize="9sp"
+                                    android:maxLines="1"
+                                    android:ellipsize="end"
+                                    android:textColor="#ADFFFFFF"
+                                    android:text="卫生间热水器" />
+
+                                <!-- 信号强度：跟在类型小字后面 -->
+                                <TextView
+                                    android:id="@+id/widget_near1_signal"
+                                    android:layout_width="wrap_content"
+                                    android:layout_height="wrap_content"
+                                    android:layout_marginStart="5dp"
+                                    android:textSize="11sp"
+                                    android:textColor="#22C55E"
+                                    android:text="●" />
+
+                                <!-- dB 数值：和 App 首页的「信号强度: -65 dBm」同一份数据 -->
+                                <TextView
+                                    android:id="@+id/widget_near1_rssi"
+                                    android:layout_width="wrap_content"
+                                    android:layout_height="wrap_content"
+                                    android:layout_marginStart="3dp"
+                                    android:textSize="9sp"
+                                    android:maxLines="1"
+                                    android:textColor="#ADFFFFFF"
+                                    android:text="— dBm" />
+                            </LinearLayout>
+                        </LinearLayout>
+
+                        <TextView
+                            android:id="@+id/widget_near1_pick"
+                            android:layout_width="wrap_content"
+                            android:layout_height="wrap_content"
+                            android:layout_marginStart="6dp"
+                            android:background="@drawable/widget_btn_pill"
+                            android:paddingStart="13dp"
+                            android:paddingEnd="13dp"
+                            android:paddingTop="5dp"
+                            android:paddingBottom="5dp"
+                            android:textSize="11sp"
+                            android:textStyle="bold"
+                            android:textColor="#FFFFFF"
+                            android:text="选用" />
+                    </LinearLayout>
+                </LinearLayout>
+            </LinearLayout>
+
+            <!-- ═══ 页面 3：账单 ═══ -->
+            <LinearLayout
+                android:id="@+id/widget_page2"
+                android:layout_width="match_parent"
+                android:layout_height="match_parent"
+                android:orientation="vertical"
+                android:visibility="gone">
+
+                <LinearLayout
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:background="@drawable/widget_inset"
+                    android:orientation="vertical"
+                    android:paddingStart="10dp"
+                    android:paddingEnd="10dp"
+                    android:paddingTop="5dp"
+                    android:paddingBottom="5dp">
+
+                    <!-- 文案由 WidgetRenderer.bindBills 按有没有真实余额改写 -->
+                    <TextView
+                        android:id="@+id/widget_balance_label"
+                        android:layout_width="wrap_content"
+                        android:layout_height="wrap_content"
+                        android:textSize="9.5sp"
+                        android:textColor="#ADFFFFFF"
+                        android:text="一卡通余额" />
+
+                    <LinearLayout
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        android:orientation="horizontal"
+                        android:gravity="center_vertical">
+
+                        <ImageView
+                            android:layout_width="15dp"
+                            android:layout_height="15dp"
+                            android:src="@drawable/ic_widget_card"
+                            android:tint="#FFFFFF"
+                            android:contentDescription="余额" />
+
+                        <TextView
+                            android:id="@+id/widget_balance"
+                            android:layout_width="0dp"
+                            android:layout_height="wrap_content"
+                            android:layout_weight="1"
+                            android:layout_marginStart="6dp"
+                            android:textSize="18sp"
+                            android:textStyle="bold"
+                            android:fontFeatureSettings="tnum"
+                            android:textColor="#FFFFFF"
+                            android:text="¥ —" />
+
+                        <ImageView
+                            android:layout_width="13dp"
+                            android:layout_height="13dp"
+                            android:src="@drawable/ic_widget_chevron"
+                            android:tint="#D1FFFFFF"
+                            android:contentDescription="查看账单" />
+                    </LinearLayout>
+                </LinearLayout>
+
+                <TextView
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:layout_marginTop="4dp"
+                    android:textSize="10.5sp"
+                    android:textStyle="bold"
+                    android:textColor="#FFFFFF"
+                    android:text="最近消费" />
+
+                    <LinearLayout
+                        android:layout_width="match_parent"
+                        android:layout_height="0dp"
+                        android:layout_weight="1"
+                        android:orientation="horizontal"
+                        android:gravity="center_vertical">
+
+                        <TextView
+                            android:id="@+id/widget_bill0_emoji"
+                            android:layout_width="26dp"
+                            android:layout_height="26dp"
+                            android:background="@drawable/widget_avatar"
+                            android:gravity="center"
+                            android:textSize="13sp"
+                            android:text="🚿" />
+
+                        <LinearLayout
+                            android:layout_width="0dp"
+                            android:layout_height="wrap_content"
+                            android:layout_weight="1"
+                            android:layout_marginStart="8dp"
+                            android:orientation="vertical">
+
+                            <TextView
+                                android:id="@+id/widget_bill0_name"
+                                android:layout_width="match_parent"
+                                android:layout_height="wrap_content"
+                                android:textSize="11.5sp"
+                                android:textStyle="bold"
+                                android:maxLines="1"
+                                android:ellipsize="start"
+                                android:textColor="#FFFFFF"
+                                android:text="—" />
+
+                            <TextView
+                                android:id="@+id/widget_bill0_time"
+                                android:layout_width="match_parent"
+                                android:layout_height="wrap_content"
+                                android:textSize="9sp"
+                                android:maxLines="1"
+                                android:ellipsize="end"
+                                android:textColor="#ADFFFFFF"
+                                android:text="—" />
+                        </LinearLayout>
+
+                        <TextView
+                            android:id="@+id/widget_bill0_price"
+                            android:layout_width="wrap_content"
+                            android:layout_height="wrap_content"
+                            android:textSize="12.5sp"
+                            android:textStyle="bold"
+                            android:fontFeatureSettings="tnum"
+                            android:textColor="#FFFFFF"
+                            android:text="—" />
+                    </LinearLayout>
+                    <LinearLayout
+                        android:layout_width="match_parent"
+                        android:layout_height="0dp"
+                        android:layout_weight="1"
+                        android:orientation="horizontal"
+                        android:gravity="center_vertical">
+
+                        <TextView
+                            android:id="@+id/widget_bill1_emoji"
+                            android:layout_width="26dp"
+                            android:layout_height="26dp"
+                            android:background="@drawable/widget_avatar"
+                            android:gravity="center"
+                            android:textSize="13sp"
+                            android:text="🚿" />
+
+                        <LinearLayout
+                            android:layout_width="0dp"
+                            android:layout_height="wrap_content"
+                            android:layout_weight="1"
+                            android:layout_marginStart="8dp"
+                            android:orientation="vertical">
+
+                            <TextView
+                                android:id="@+id/widget_bill1_name"
+                                android:layout_width="match_parent"
+                                android:layout_height="wrap_content"
+                                android:textSize="11.5sp"
+                                android:textStyle="bold"
+                                android:maxLines="1"
+                                android:ellipsize="start"
+                                android:textColor="#FFFFFF"
+                                android:text="—" />
+
+                            <TextView
+                                android:id="@+id/widget_bill1_time"
+                                android:layout_width="match_parent"
+                                android:layout_height="wrap_content"
+                                android:textSize="9sp"
+                                android:maxLines="1"
+                                android:ellipsize="end"
+                                android:textColor="#ADFFFFFF"
+                                android:text="—" />
+                        </LinearLayout>
+
+                        <TextView
+                            android:id="@+id/widget_bill1_price"
+                            android:layout_width="wrap_content"
+                            android:layout_height="wrap_content"
+                            android:textSize="12.5sp"
+                            android:textStyle="bold"
+                            android:fontFeatureSettings="tnum"
+                            android:textColor="#FFFFFF"
+                            android:text="—" />
+                    </LinearLayout>
+            </LinearLayout>
+        </FrameLayout>
+    </LinearLayout>
+</FrameLayout>

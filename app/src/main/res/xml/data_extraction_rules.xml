@@ -1,0 +1,15 @@
+<?xml version="1.0" encoding="utf-8"?>
+<data-extraction-rules>
+    <cloud-backup>
+        <!-- 加密偏好依赖本机 Keystore，恢复到其它设备后只会留下无法解密的数据。 -->
+        <exclude domain="sharedpref" path="muguang_prefs.xml" />
+        <!-- ⚠️ 明文回退文件（见 PrefsHelper.FILE_PLAIN）—— 最不该进备份的一份 -->
+        <exclude domain="sharedpref" path="muguang_prefs_plain.xml" />
+        <exclude domain="file" path="muguang_log.txt" />
+    </cloud-backup>
+    <device-transfer>
+        <exclude domain="sharedpref" path="muguang_prefs.xml" />
+        <exclude domain="sharedpref" path="muguang_prefs_plain.xml" />
+        <exclude domain="file" path="muguang_log.txt" />
+    </device-transfer>
+</data-extraction-rules>

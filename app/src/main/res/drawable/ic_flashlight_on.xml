@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- 手电筒「已点亮」态：和 ic_flashlight 同一套 pathData，但填实不描边。
+     开灯后图标换成本图 + 按钮底色变暖黄，才看得出"灯开了" -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="24dp"
+    android:height="24dp"
+    android:viewportWidth="24"
+    android:viewportHeight="24">
+    <path
+        android:pathData="M7,3h10v5H7z M7,8h10l-2,4v9h-6v-9z"
+        android:fillColor="#1A1206" />
+</vector>

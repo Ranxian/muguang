@@ -1,0 +1,138 @@
+package io.github.ranxian.muguang.ui
+
+import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material3.*
+import androidx.compose.runtime.Composable
+import androidx.compose.ui.Alignment
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
+import io.github.ranxian.muguang.model.DeviceInfo
+import io.github.ranxian.muguang.ui.design.Design
+import io.github.ranxian.muguang.ui.theme.AppColors
+import io.github.ranxian.muguang.utils.MoneyFormat
+
+@Composable
+fun DeviceDetailDialog(
+    device: DeviceInfo?,
+    isActive: Boolean = false,
+    isOwner: Boolean = true,
+    isBoundWasher: Boolean = false,
+    onDismiss: () -> Unit,
+    onConfirm: () -> Unit,
+    onBindWasher: (() -> Unit)? = null,
+    onUnbindWasher: (() -> Unit)? = null
+) {
+    if (device == null) return
+
+    val emoji = device.typeEmoji
+    val type = when {
+        device.isDrinkingWater -> if (device.isHotWater) "饮水（热水）" else "饮水（冷水）"
+        device.isWasher -> "洗衣机"
+        device.typeName == "洗手台" -> "洗漱"
+        else -> "沐浴"
+    }
+    val location = device.displayName
+    val startText = when {
+        device.isDrinkingWater -> "开始接水"
+        device.isLaundry -> "选择模式"
+        else -> "开始使用"
+    }
+    // 蓝牙表：App 内**已支持**，走 BleShowerController。
+    // 只是要多提醒一句「手机是网关、别走远」——这是这类设备固有的限制，
+    // 用户不知道的话很容易开了水然后就关不上了。
+    val isBle = device.needsBluetoothControl && !device.isLaundry
+
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = {
+            Column(horizontalAlignment = Alignment.CenterHorizontally, modifier = Modifier.fillMaxWidth()) {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    // ⚠️ 这里用 emoji，**不要**换成 DeviceGlyph。
+                    //
+                    // DeviceGlyph 的图标 tint 写死是白色，因为它默认压在设备类型色的
+                    // 圆底上（首页那几张卡片都有底色）。而这个标题行**没有底色**——
+                    // 白图标直接压在对话框的浅色背景上，等于看不见。
+                    Text(emoji, fontSize = 22.sp)
+                    Spacer(Modifier.width(6.dp))
+                    Text(type, fontSize = 22.sp, fontWeight = FontWeight.Bold)
+                }
+                Text(location, fontSize = 15.sp, color = Design.palette.inkMuted, fontWeight = FontWeight.Medium)
+            }
+        },
+        text = {
+            Column {
+                DetailRow("类型", device.typeName)
+                DetailRow("SN 码", device.snCode)
+                DetailRow("MAC 地址", device.macAddress)
+                DetailRow("预扣金额", MoneyFormat.withSymbol(device.withholdMoney))
+                DetailRow("状态", if (isActive) "使用中" else "空闲")
+                if (device.isLaundry) {
+                    Spacer(Modifier.height(10.dp))
+                    Text(
+                        "洗衣机需要先选择洗涤模式和时长。模式与价格由服务端下发，" +
+                            "启动后可查看洗涤、漂洗、脱水等实时阶段。",
+                        fontSize = 13.sp,
+                        color = AppColors.TextSecondary,
+                        lineHeight = 18.sp
+                    )
+                    // 绑定只记住设备，不要求现在下单；绑定后首页会常驻一张
+                    // 「我的洗衣机」卡片，别人正在洗也能看到阶段与剩余时间
+                    Spacer(Modifier.height(2.dp))
+                    if (isBoundWasher) {
+                        TextButton(onClick = { onUnbindWasher?.invoke() }) {
+                            Text("已绑定为我的洗衣机 · 解除绑定", fontSize = 13.sp)
+                        }
+                    } else if (onBindWasher != null) {
+                        TextButton(onClick = { onBindWasher() }) {
+                            Text("绑定为我的洗衣机", fontSize = 13.sp)
+                        }
+                    }
+                }
+                if (isBle) {
+                    Spacer(Modifier.height(10.dp))
+                    Text(
+                        "此设备通过手机蓝牙直连控制：开启后请留在设备旁，" +
+                            "走远会断开连接、无法关闭。",
+                        fontSize = 13.sp,
+                        color = AppColors.TextSecondary,
+                        lineHeight = 18.sp
+                    )
+                }
+            }
+        },
+        confirmButton = {
+            val canUse = !isActive || isOwner
+            val txt = when {
+                isActive && !isOwner -> "他人使用中"
+                isActive && device.isWasher -> "查看进行中"
+                isActive -> "恢复使用"
+                else -> startText
+            }
+            Button(onClick = { if (canUse) { onConfirm(); onDismiss() } },
+                enabled = canUse,
+                colors = ButtonDefaults.buttonColors(
+                    containerColor = if (canUse) AppColors.Accent else AppColors.TextSecondary
+                )) {
+                Text(txt)
+            }
+        },
+        dismissButton = {
+            TextButton(onClick = onDismiss) { Text("取消") }
+        }
+    )
+}
+
+@Composable
+fun DetailRow(label: String, value: String) {
+    Row(
+        modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp),
+        horizontalArrangement = Arrangement.SpaceBetween
+    ) {
+        Text(label, style = MaterialTheme.typography.bodyMedium, fontWeight = FontWeight.Bold)
+        Text(value, style = MaterialTheme.typography.bodyMedium)
+    }
+}

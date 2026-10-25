@@ -1,0 +1,3240 @@
+package io.github.ranxian.muguang.ui
+
+import android.content.Context
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateListOf
+import androidx.compose.runtime.mutableStateMapOf
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.setValue
+import androidx.lifecycle.ViewModel
+import androidx.lifecycle.viewModelScope
+import io.github.ranxian.muguang.api.NetworkModule
+import io.github.ranxian.muguang.api.getAccountInfoSafe
+import io.github.ranxian.muguang.api.getBillListSafe
+import io.github.ranxian.muguang.api.getBindCardInfoSafe
+import io.github.ranxian.muguang.api.getCampusUserInfoSafe
+import io.github.ranxian.muguang.api.getDeviceInfoSafe
+import io.github.ranxian.muguang.api.forgetPasswordSafe
+import io.github.ranxian.muguang.api.generateUseCodeSafe
+import io.github.ranxian.muguang.api.getProjectInfoSafe
+import io.github.ranxian.muguang.api.getUseCodeSafe
+import io.github.ranxian.muguang.api.queryUnpaidBillsSafe
+import io.github.ranxian.muguang.api.requestDeductSafe
+import io.github.ranxian.muguang.api.setUseCodeSafe
+import io.github.ranxian.muguang.api.getWalletSafe
+import io.github.ranxian.muguang.api.queryUsingSafe
+import io.github.ranxian.muguang.data.BalanceEstimator
+import io.github.ranxian.muguang.data.ActiveOrderRepository
+import io.github.ranxian.muguang.data.BoundWasherState
+import io.github.ranxian.muguang.data.BoundWasherView
+import io.github.ranxian.muguang.data.BleArbiter
+import io.github.ranxian.muguang.data.CloseOutcome
+import io.github.ranxian.muguang.data.OpenOutcome
+import io.github.ranxian.muguang.data.ProjectRepository
+import io.github.ranxian.muguang.data.ProjectSwitchOutcome
+import io.github.ranxian.muguang.data.ServiceProject
+import io.github.ranxian.muguang.data.toServiceProject
+import io.github.ranxian.muguang.ble.BleController
+import io.github.ranxian.muguang.ble.BleConnectResult
+import io.github.ranxian.muguang.ble.DeviceQueryState
+import io.github.ranxian.muguang.data.BleShowerController
+import io.github.ranxian.muguang.data.ShowerController
+import io.github.ranxian.muguang.data.ShowerEvents
+import io.github.ranxian.muguang.data.SettlementReconciler
+import io.github.ranxian.muguang.data.WasherController
+import io.github.ranxian.muguang.data.WasherStartOutcome
+import io.github.ranxian.muguang.service.ShowerWatchService
+import io.github.ranxian.muguang.widget.MuguangWidget
+import io.github.ranxian.muguang.model.AccountInfo
+import io.github.ranxian.muguang.model.ActiveOrder
+import io.github.ranxian.muguang.model.CachedBill
+import io.github.ranxian.muguang.model.CachedDevice
+import io.github.ranxian.muguang.model.UseCodeData
+import io.github.ranxian.muguang.model.BillItem
+import io.github.ranxian.muguang.model.DeviceInfo
+import io.github.ranxian.muguang.model.MqttOrderMsg
+import io.github.ranxian.muguang.model.NearbyDevice
+import io.github.ranxian.muguang.model.OrderLastBean
+import io.github.ranxian.muguang.model.UnpaidBill
+import io.github.ranxian.muguang.model.WalletData
+import io.github.ranxian.muguang.model.WasherMode
+import io.github.ranxian.muguang.model.WasherSession
+import io.github.ranxian.muguang.model.WasherStatus
+import io.github.ranxian.muguang.model.washerMainModes
+import io.github.ranxian.muguang.utils.AppLogger
+import io.github.ranxian.muguang.utils.BluetoothScanner
+import io.github.ranxian.muguang.utils.MqttManager
+import io.github.ranxian.muguang.utils.Notifier
+import io.github.ranxian.muguang.utils.PrefsHelper
+import com.google.gson.Gson
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.cancelAndJoin
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.CoroutineStart
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.isActive
+import kotlinx.coroutines.launch
+import kotlin.math.abs
+import io.github.ranxian.muguang.utils.MoneyFormat
+import io.github.ranxian.muguang.data.DeviceInfoCache
+import io.github.ranxian.muguang.widget.WidgetBridge
+import io.github.ranxian.muguang.data.MacFormat
+import io.github.ranxian.muguang.data.SettlementEngine
+
+/**
+ * 开阀失败的原因分类。
+ *
+ * ⚠️ 界面**只对 [SERVER_REJECTED] 引导去补扣**。把网络异常、设备被占用、结果未知
+ * 也归到「有欠费」里，用户就会因为一次 WiFi 掉线被引导去真扣钱。
+ */
+enum class ShowerErrorKind {
+    /** 服务端明确拒绝（欠费、账户异常…）——**只有这一类**和未扣账单有关 */
+    SERVER_REJECTED,
+    /** 设备正被别人用着 */
+    IN_USE_BY_OTHERS,
+    /** 开阀结果未知（预算耗尽没确认上） */
+    UNKNOWN_RESULT,
+    /** 网络异常 */
+    NETWORK,
+    /** 设备信息不完整 */
+    BAD_DEVICE,
+
+    WASHER_REJECTED,
+}
+
+/** 开阀失败：[message] 给用户看，[kind] 决定界面要不要引导去补扣 */
+data class ShowerError(val message: String, val kind: ShowerErrorKind)
+
+class MainViewModel : ViewModel() {
+
+    var walletInfo by mutableStateOf<WalletData?>(null)
+    val nearbyDevices = mutableStateListOf<NearbyDevice>()
+    var isScanning by mutableStateOf(false)
+    var scanStartTime by mutableStateOf(0L)
+
+    var isShowering by mutableStateOf(false)
+    var isStartingShower by mutableStateOf(false)
+    var isStopping by mutableStateOf(false)
+
+    // ── 蓝牙水表（smallTypeId==1 / isBle）──
+    //
+    // 与 4G 表最大的不同：**连接必须跨「开阀 → 用水 → 关阀」整段存活**。
+    // 蓝牙表的阀是手机直连开的，中途断开连接就没法再关阀了，
+    // 所以这两个对象挂在 ViewModel 上，不能像普通请求那样用完即弃。
+
+    /** 当前蓝牙连接。没有进行中的蓝牙用水时为 null */
+    private var bleController: BleController? = null
+
+    /** 当前蓝牙用水会话。开阀成功后写入，结算完清空 */
+    private var bleSession: BleShowerController.Session? = null
+
+    private data class BleConnection(
+        val controller: BleController?,
+        val session: BleShowerController.Session
+    )
+
+    private val projectBleConnections = mutableMapOf<String, BleConnection>()
+    private val backgroundBleStopJobs = mutableMapOf<String, Job>()
+
+    /**
+     * 蓝牙流程的进度文案（null 表示没在进行）。
+     *
+     * 蓝牙开阀比 4G 表慢得多——要连设备、等状态帧、下费率、写费率包，
+     * 全程好几秒，不给反馈用户会以为卡死。
+     */
+    var bleProgress by mutableStateOf<String?>(null)
+        private set
+
+    /**
+     * 云端开阀返回 306 时暂存这里，等用户在确认框里决定要不要改用蓝牙。
+     *
+     * 非 null 即表示「弹框正在显示」。用户确认或取消后清空。
+     */
+    var bleRetryDevice by mutableStateOf<DeviceInfo?>(null)
+        private set
+
+    /**
+     * 用户在确认框里选了「用蓝牙重试」。
+     *
+     * 先记下这台设备（`markBleDevice`），再走蓝牙流程——
+     * **先记再看结果**：万一蓝牙连接超时（用户走远了），标记还是要保住的，
+     * 否则下次又要问一遍。真猜错了（连上但没有水控服务）会自动撤销。
+     */
+    fun confirmBleRetry() {
+        if (projectSwitching) return
+        val device = bleRetryDevice ?: return
+        bleRetryDevice = null
+        PrefsHelper.markBleDevice(device.snCode)
+        isStartingShower = true
+        sessionScope().launch {
+            try {
+                showerError = null
+                showerSnCode = device.snCode
+                startBleShower(device, phone, device.snCode)
+            } catch (t: Throwable) {
+                AppLogger.e("蓝牙重试异常", t)
+                showerError = ShowerError("蓝牙开启失败，请重试", ShowerErrorKind.NETWORK)
+            } finally {
+                isStartingShower = false
+            }
+        }
+    }
+
+    /** 用户放弃蓝牙方式 */
+    fun dismissBleRetry() {
+        bleRetryDevice = null
+    }
+
+    /**
+     * 服务端「设备不在线」的业务错误码。
+     *
+     * ⚠️ 用它判断，**不要匹配文案**（之前就是匹配「不在线」三个字，太脆：
+     * 措辞会随学校和服务端版本变，而且我们只能覆盖到自己见过的说法）。
+     */
+    private val ERROR_DEVICE_OFFLINE = 306
+    var showerRemaining by mutableStateOf("0.00")
+    var showerConsumed by mutableStateOf(0.0)
+    var showerPreDeduct by mutableStateOf(0.0)
+    var showerElapsedSec by mutableStateOf(0)
+    var autoDisConSec by mutableStateOf(0)   // 自动关停剩余秒数，0 = 未知
+    var showerError by mutableStateOf<ShowerError?>(null)
+    var toastMessage by mutableStateOf<String?>(null)
+
+    // ── 自动关停确认弹窗 ──
+    var showAutoCloseDialog by mutableStateOf(false)
+    var autoCloseDeviceName by mutableStateOf("")
+    var autoCloseElapsed by mutableStateOf(0)
+    /** 自动关停那笔的金额。**null = 没拿到**，和 0.0（确实没花钱）不是一回事 */
+    var autoCloseConsumed by mutableStateOf<Double?>(null)
+    var autoCloseLoading by mutableStateOf(false)
+
+    var kickedOut by mutableStateOf(false)
+
+    var lastDeviceName by mutableStateOf("")
+    var lastDeviceMac by mutableStateOf("")
+    var lastDeviceSnCode by mutableStateOf("")
+    var lastDeviceEmoji by mutableStateOf("🚿")
+    var lastDeviceProjectId by mutableStateOf("")
+
+    var selectedDevice by mutableStateOf<DeviceInfo?>(null)
+    var showDeviceDetail by mutableStateOf(false)
+
+    var washerModePickerDevice by mutableStateOf<DeviceInfo?>(null)
+        private set
+
+    val washerModes = mutableStateListOf<WasherMode>()
+    var isLoadingWasherModes by mutableStateOf(false)
+        private set
+
+    var activeWasherSession by mutableStateOf<WasherSession?>(null)
+        private set
+
+    var washerStatus by mutableStateOf<WasherStatus?>(null)
+        private set
+
+    var washerStageText by mutableStateOf("")
+        private set
+
+    var washerRemainingSec by mutableStateOf(0)
+        private set
+
+    // ── 已绑定洗衣机 ──
+    // 与 activeWasherSession 无关：绑定只记住设备，不要求本机下过单。
+    // 状态来自 washer/status，所以别人正在洗也能看到阶段与剩余时间。
+    var boundWasher by mutableStateOf<DeviceInfo?>(null)
+        private set
+    var boundWasherView by mutableStateOf<BoundWasherView?>(null)
+        private set
+    var boundWasherRefreshing by mutableStateOf(false)
+        private set
+    /** 本轮状态写入的时间戳（服务器时钟），供界面做本地倒计时 */
+    var boundWasherUpdatedAtMs by mutableStateOf(0L)
+        private set
+
+    private var washerPollJob: Job? = null
+
+    /**
+     * 洗衣机倒计时的**基准值与其观测时刻**。
+     *
+     * 服务端 3 秒才回一次状态，界面不能只在响应回来时更新——那样数字在两轮轮询之间
+     * 是冻住的（以前 `washerRemainingSec = washerRemainingSec` 就是这段空转）。
+     * 每次拿到服务端值就重置这两个字段，每秒用 [BoundWasherState.countdown] 现算。
+     */
+    private var washerRemainingBaseSec: Int = 0
+    private var washerRemainingUpdatedAtMs: Long = 0L
+
+    /**
+     * 绑定设备的「订单视角」观测状态，用来把别人的倒计时从估算升级成实测。
+     *
+     * 服务端对别人的订单**不给剩余秒**（`OrderLastBean` 只有 `modeTime` 总时长和
+     * `consumeDate` 下单时间），所以只能靠把自己看到的启动时刻记下来：
+     * 轮询到订单号切换的那一刻，就是这一单真正上水的时间。
+     * 已知剩余 = `modeTime − (服务器现在 − 观测到的启动时刻)`。
+     */
+    private var boundOrderKey: String = ""
+    private var boundOrderStartedAtMs: Long = 0L
+    /** 上一轮轮询看到的订单号与服务器时刻，用来判断「订单号是不是这一轮才换的」 */
+    private var lastPollOrderKey: String = ""
+    private var lastPollServerMs: Long = 0L
+    /** 上一轮正在跑的那单（订单号 / 总时长 / 启动时刻），用来判断新单是不是在排队 */
+    private var prevRunningKey: String = ""
+    private var prevRunningModeTime: Int = 0
+    private var prevRunningStartMs: Long = 0L
+    private var boundPollJob: Job? = null
+
+    /**
+     * 设备归属（按 snCode 索引）。
+     *
+     * ⚠️ 原先是一个全局 `isOwner` 布尔，而 [refreshDeviceStatus] 是**异步**的——
+     * 快速切换设备时，A 的响应回来会盖到 B 上（「A 是别人的」串成 B 的状态，
+     * 详情弹窗的按钮就会错灰或错亮）。改成按 snCode 存：谁的结果写谁，互不干扰。
+     */
+    private val ownerBySn = mutableStateMapOf<String, Boolean>()
+
+    /** 该设备是否归自己（没查过时按「是自己的」处理，与原默认值一致） */
+    fun isOwnerFor(snCode: String): Boolean = ownerBySn[snCode] ?: true
+
+    /** 当前选中设备是否归自己（设备详情弹窗用） */
+    val isOwner: Boolean get() = selectedDevice?.snCode?.let { isOwnerFor(it) } ?: true
+
+    // ── 多设备活跃订单 ──
+    val activeOrders = mutableStateListOf<ActiveOrder>()
+
+    // 用于当前洗澡的设备 snCode
+    private var showerSnCode: String? = null
+
+    private var currentOrderNo: String? = null
+    private var activeDeviceSnCodes = mutableSetOf<String>()
+    /** 本轮扫描里已经发起过设备信息查询的 MAC（见 [addDevice]）；[startScan] 时清空 */
+    private val queriedThisScan = mutableSetOf<String>()
+    private val gson = Gson()
+    private var scanner: BluetoothScanner? = null
+    private var mqttManager: MqttManager? = null
+    private var timerJob: Job? = null
+    private var orderPollJob: Job? = null
+    private var kickWatchJob: Job? = null
+    private var billLoadSeq = 0
+
+    /**
+     * 会话级协程作用域。
+     *
+     * 所有"发请求"的任务都挂在这上面，而不是直接挂 viewModelScope——
+     * 这样被挤号 / 退出登录时可以把它们**整体取消**。
+     *
+     * 为什么必须整体取消：这些请求是拿旧 loginCode 发出去的，
+     * 响应可能在用户已经重新登录之后才回来，里面写着"登录失效"。
+     * 若不掐断，`checkKick` 会拿旧会话的失败去清掉**新会话**的凭证，
+     * 表现就是"被挤下线后重新登录，刚进去又被弹出来"。
+     */
+    private var sessionJob = SupervisorJob(viewModelScope.coroutineContext[Job])
+    private fun sessionScope() = CoroutineScope(
+        viewModelScope.coroutineContext + sessionJob + NetworkModule.session().contextElement()
+    )
+
+    init {
+        restoreProjectWasherSession()
+        restoreBoundWasher()
+        // 让小组件服务知道「App 还活着、可能握着 BLE 连接」（见 BleArbiter）
+        BleArbiter.appAlive = true
+        viewModelScope.launch {
+            ShowerEvents.finished.collect { onShowerFinishedFromService(it) }
+        }
+        viewModelScope.launch {
+            ShowerEvents.ordersRestored.collect {
+                syncActiveOrdersFromPrefs()
+                refreshWidgets()
+            }
+        }
+        viewModelScope.launch {
+            ShowerEvents.stopBleRequest.collect { snCode ->
+                while (projectSwitching) delay(100)
+                val order = ActiveOrderRepository.find(snCode) ?: return@collect
+                if (order.projectId == currentProjectId && !projectSwitching) {
+                    if (bleSession?.snCode == snCode && bleController != null) stopBleShower()
+                    else reconnectAndStopBle(snCode)
+                } else {
+                    stopBackgroundBleOrder(snCode)
+                }
+            }
+        }
+    }
+
+    private fun restoreProjectWasherSession() {
+        runCatching {
+            gson.fromJson(PrefsHelper.washerSessionJson, WasherSession::class.java)
+        }.getOrNull()?.takeIf {
+            it.device.snCode.isNotBlank() && (it.orderId.isNotBlank() || it.mode.typeId > 0)
+        }?.let { session ->
+            activeWasherSession = session
+            selectedDevice = session.device
+            washerStageText = session.mode.displayName
+            showerElapsedSec = ((System.currentTimeMillis() - session.startedAtMs) / 1000)
+                .toInt().coerceAtLeast(0)
+            washerRemainingSec = (session.mode.times - showerElapsedSec).coerceAtLeast(0)
+            // 恢复出来的剩余秒数也要有基准时刻，否则打开使用页时本地倒数无法继续
+            washerRemainingBaseSec = washerRemainingSec
+            washerRemainingUpdatedAtMs = System.currentTimeMillis()
+            startWasherPoll(session.device.snCode)
+
+            // 进程被杀期间这一单很可能早就洗完了，而落盘的会话会让首页一直显示
+            // 「使用中」，并且 `PrefsHelper.hasWasherSession()` 会让退出登录被永久拒绝。
+            // 所以恢复后必须向服务端确认一次：明确已不在使用就立刻清掉会话；
+            // 查不到（网络失败）时保持原样——「不知道」不能当成「已结束」。
+            sessionScope().launch {
+                // 挤号后凭据已清、但会话是被**刻意保留**的（preserveActiveRecovery）。
+                // 无身份请求问不出真实状态，不能拿它来结束这个会话
+                if (!PrefsHelper.isLoggedIn) return@launch
+                val status = WasherController.status(session.device) ?: return@launch
+                // 期间可能已经换了别的会话（哪怕是同一台设备重新下单），
+                // 只允许清理「恢复出来的这一份」会话
+                if (activeWasherSession !== session) return@launch
+                if (status.isOwner && status.looksActive) applyWasherStatus(status) else finishWasherState()
+            }
+        }
+    }
+
+    // ── 绑定洗衣机 ──
+
+    fun isBoundWasher(snCode: String): Boolean =
+        snCode.isNotBlank() && boundWasher?.snCode == snCode
+
+    /**
+     * 绑定一台洗衣机。只接受 `isLaundry` 的设备——避免把热水器/饮水机绑成「我的洗衣机」，
+     * 之后每次刷新都拿错设备去查状态。
+     */
+    /**
+     * 仅供 debug 预览（src/debug 的 PreviewActivity）灌假绑定状态；
+     * 正式代码一律走 [bindWasher] / [refreshBoundWasher]，状态只能来自服务端。
+     */
+    fun previewSetBoundWasher(device: DeviceInfo, view: BoundWasherView, updatedAtMs: Long = System.currentTimeMillis()) {
+        boundWasher = device
+        boundWasherView = view
+        boundWasherUpdatedAtMs = updatedAtMs
+    }
+
+    fun bindWasher(device: DeviceInfo) {
+        if (!device.isLaundry) {
+            toastMessage = "只有洗衣机可以绑定"
+            return
+        }
+        if (device.snCode.isBlank()) {
+            toastMessage = "设备缺少 SN 码，无法绑定"
+            return
+        }
+        PrefsHelper.boundWasherJson = gson.toJson(device)
+        boundWasher = device
+        boundWasherView = BoundWasherState.from(
+            status = null,
+            sessionStartedAtMs = null,
+            nowMs = System.currentTimeMillis(),
+            failed = false
+        )
+        boundWasherUpdatedAtMs = System.currentTimeMillis()
+        toastMessage = "已绑定「${device.displayName}」"
+        refreshBoundWasher()
+    }
+
+    fun unbindWasher() {
+        PrefsHelper.boundWasherJson = ""
+        boundWasher = null
+        boundWasherView = null
+        boundWasherRefreshing = false
+        boundWasherUpdatedAtMs = 0L
+        stopBoundWasherPoll()
+        toastMessage = "已解除洗衣机绑定"
+    }
+
+    /** 解绑 / 登出时停掉连续轮询，并把「订单视角」观测状态清干净 */
+    private fun stopBoundWasherPoll() {
+        boundPollJob?.cancel()
+        boundPollJob = null
+        boundOrderKey = ""
+        boundOrderStartedAtMs = 0L
+        lastPollOrderKey = ""
+        lastPollServerMs = 0L
+        prevRunningKey = ""
+        prevRunningModeTime = 0
+        prevRunningStartMs = 0L
+    }
+
+    /**
+     * 查一次绑定洗衣机的状态。别人正在用也要能显示，所以不依赖 [activeWasherSession]。
+     *
+     * 双查：`washer/status` 拿本机视角的剩余秒数，`lastOrder/byMac` 拿设备视角的
+     * 「有没有人在用」——有的学校对别人的订单在 status 上直接回空闲，只查 status
+     * 会把「别人正在洗」显示成「空闲」。
+     *
+     * 时间一律用**服务器时钟**（`NetworkModule.serverNowMs()`）：别人的单只能拿
+     * `modeTime` 和服务器下发的 `consumeDate` 相减，一边是本机时钟、一边是服务器时间，
+     * 手机时间差几分钟倒计时就差几分钟。
+     *
+     * 两条都失败才标记「状态未知」，不能落成「空闲」——那会让用户以为机器可以用。
+     */
+    fun refreshBoundWasher() {
+        val device = boundWasher ?: return
+        if (boundWasherRefreshing) return
+        boundWasherRefreshing = true
+        viewModelScope.launch {
+            try {
+                val status = WasherController.status(device)
+                val lastOrder = WasherController.lastOrder(device)
+                val nowMs = NetworkModule.serverNowMs()
+                val startedAt = activeWasherSession
+                    ?.takeIf { it.device.snCode == device.snCode }
+                    ?.startedAtMs
+
+                val (observedStart, startObserved) = observeBoundOrderStart(lastOrder, nowMs)
+                val view = BoundWasherState.from(
+                    status = status,
+                    lastOrder = lastOrder,
+                    sessionStartedAtMs = startedAt,
+                    nowMs = nowMs,
+                    failed = status == null && lastOrder == null,
+                    myAccountId = NetworkModule.authFields()["accountId"],
+                    startedAtOverrideMs = observedStart,
+                    startIsObserved = startObserved
+                )
+                boundWasherView = view
+                boundWasherUpdatedAtMs = nowMs
+
+                AppLogger.w(
+                    "BOUND ${device.snCode} label=${view.statusLabel}" +
+                        " remain=${view.remainingSec}s estimate=${view.remainingIsEstimate}" +
+                        " | srvNow=$nowMs offset=${NetworkModule.serverClockOffset()}ms" +
+                        " | status.time=${status?.time} status.modeTime=${status?.modeTime}" +
+                        " status.owner=${status?.isOwner} status.display=${status?.liquidOrderStatusDisplay}" +
+                        " | order.key=${lastOrder?.orderKey?.take(12)} order.modeTime=${lastOrder?.modeTime}" +
+                        " order.status=${lastOrder?.liquidOrderStatus} order.consumeDate=${lastOrder?.consumeDate}" +
+                        " order.account=${lastOrder?.accountId} observedStart=$observedStart observed=$startObserved"
+                )
+
+                if (view.isActive) ensureBoundWasherPoll()
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                AppLogger.e("刷新绑定洗衣机状态失败", e)
+                boundWasherView = BoundWasherState.from(
+                    status = null,
+                    sessionStartedAtMs = null,
+                    nowMs = NetworkModule.serverNowMs(),
+                    failed = true
+                )
+                boundWasherUpdatedAtMs = NetworkModule.serverNowMs()
+            } finally {
+                boundWasherRefreshing = false
+            }
+        }
+    }
+
+    /**
+     * 判断「这一单是什么时候真正开始洗的」。
+     *
+     * 服务端不给别人订单的剩余秒，`consumeDate` 又只是**下单**时间：上一单还没洗完就
+     * 付钱的单会排队，真正上水可能晚十几分钟——按 `consumeDate` 算就会少报十几分钟
+     * （用户实测：机器剩 41 分钟，卡片说 28 分钟）。
+     *
+     * 两条路把它定准：
+     * - 轮询看到订单号切换 → 启动就在上一轮和这一轮之间，取中点；
+     * - 上一单还在跑就出现了新单 → 新单在排队，启动时间 ≈ 上一单的结束时间。
+     *
+     * @return (启动时刻毫秒, 是否亲眼观测到)。第二个值为 false 时那个时刻只是预测，
+     *   界面仍要标「约」。
+     */
+    private fun observeBoundOrderStart(lastOrder: OrderLastBean?, nowMs: Long): Pair<Long, Boolean> {
+        // lastOrder == null 既可能是「没有单」也可能是「这次查询失败」，分不出来，
+        // 所以不清状态：真没单的话状态会在下一轮正常收敛，别因为一次抖动把观测到的启动时刻洗掉
+        if (lastOrder == null) {
+            return boundOrderStartedAtMs to (boundOrderStartedAtMs > 0L)
+        }
+
+        val currentKey = lastOrder.orderKey
+        val runningNow = lastOrder.isRunning(nowMs)
+
+        var startMs = 0L
+        var observed = false
+        if (runningNow && currentKey.isNotEmpty()) {
+            if (currentKey == boundOrderKey && boundOrderStartedAtMs > 0L) {
+                // 之前就盯着这一单，启动时刻已经定下来了
+                startMs = boundOrderStartedAtMs
+                observed = true
+            } else {
+                val prevEndMs = if (prevRunningKey.isNotEmpty() && prevRunningKey != currentKey &&
+                    prevRunningModeTime > 0 && prevRunningStartMs > 0L
+                ) {
+                    prevRunningStartMs + prevRunningModeTime * 1000L
+                } else {
+                    0L
+                }
+                // 只有上一轮刚看过（3 分钟内）才算「亲眼看到切换」；
+                // 放太久的话中点会落在很久以前，反而更离谱
+                val sawSwitch = lastPollOrderKey.isNotEmpty() && currentKey != lastPollOrderKey &&
+                    lastPollServerMs > 0L && nowMs - lastPollServerMs <= 180_000L
+                when {
+                    // 上一单还没洗完：这单在排队，真正上水在上一单结束之后
+                    prevEndMs > nowMs -> {
+                        startMs = prevEndMs
+                        observed = false
+                    }
+                    // 亲眼看到订单号在这一轮切换：启动发生在两次轮询之间
+                    sawSwitch -> {
+                        startMs = (lastPollServerMs + nowMs) / 2
+                        observed = true
+                    }
+                    // 第一次看到这一单，不知道它什么时候开始的 → 交给 consumeDate 估算
+                    else -> startMs = 0L
+                }
+            }
+        }
+
+        boundOrderKey = if (runningNow) currentKey else ""
+        boundOrderStartedAtMs = startMs
+
+        if (runningNow) {
+            prevRunningKey = currentKey
+            prevRunningModeTime = lastOrder.modeTime
+            prevRunningStartMs = startMs.takeIf { it > 0L } ?: lastOrder.startAtMs
+        } else {
+            prevRunningKey = ""
+            prevRunningModeTime = 0
+            prevRunningStartMs = 0L
+        }
+        lastPollOrderKey = currentKey
+        lastPollServerMs = nowMs
+        return startMs to observed
+    }
+
+    /**
+     * 机器在被使用时连续轮询（45 秒一次）。
+     *
+     * 这不为「刷新得更勤」，而是为了抓住订单切换的瞬间：只有连续看着，排队单的真正
+     * 上水时间才可观测；否则一打开就看到「已在下单后第 17 分钟」，怎么算都不准。
+     * 空闲时立刻停掉，不白打接口。
+     */
+    private fun ensureBoundWasherPoll() {
+        if (boundPollJob?.isActive == true) return
+        boundPollJob = viewModelScope.launch {
+            while (isActive) {
+                delay(45_000)
+                if (boundWasher == null || boundWasherView?.isActive != true) break
+                refreshBoundWasher()
+            }
+        }
+    }
+
+    private fun restoreBoundWasher() {
+        boundWasher = runCatching {
+            gson.fromJson(PrefsHelper.boundWasherJson, DeviceInfo::class.java)
+        }.getOrNull()?.takeIf { it.isLaundry && it.snCode.isNotBlank() }
+        boundWasherView = if (boundWasher != null) {
+            BoundWasherState.from(
+                status = null,
+                sessionStartedAtMs = null,
+                nowMs = System.currentTimeMillis(),
+                failed = false
+            )
+        } else {
+            null
+        }
+        boundWasherUpdatedAtMs = if (boundWasher != null) System.currentTimeMillis() else 0L
+        if (boundWasher != null) refreshBoundWasher()
+    }
+
+    // ── 账单 ──
+    var billList by mutableStateOf<List<BillItem>>(emptyList())
+    var billHistory by mutableStateOf<List<BillItem>>(emptyList())
+    var billsProjectId by mutableStateOf("")
+        private set
+    var isLoadingBills by mutableStateOf(false)
+
+    /**
+     * 账单是否**至少成功拉取过一次**。
+     *
+     * 余额是「用户填的初始余额 − 账单里的消费」算出来的。账单到位之前 billList 是空的，
+     * 减数为 0，于是界面上会先亮出那个初始值、等账单到了再跳到真实值——
+     * 看着就像余额自己变了一下（用户复现的「10.60 跳变」就是这个）。
+     * 所以没加载完之前不显示估算结果，宁可先显示「—」。
+     */
+    var billsLoaded by mutableStateOf(false)
+        private set
+    var useCodeData by mutableStateOf<UseCodeData?>(null)
+        private set
+
+    /**
+     * 使用码接口有没有**成功**拉过一次。
+     *
+     * 界面靠它区分两种「没有码」：还没拉到（显示「加载中」）和
+     * 拉到了但服务端说这人没有码（`useCode` 为 null，显示「尚未领取」）。
+     * 没有这个标志的话，没领过码的人会永远停在「加载中」。
+     */
+    var useCodeLoaded by mutableStateOf(false)
+        private set
+
+    /**
+     * 账号信息（姓名 / 学号 / 绑定状态）。null = 还没拉到。
+     *
+     * 存在的意义在于**能触发重组**：直接让界面读 `PrefsHelper.userName` 的话，
+     * 拉完数据界面不会自己刷新（Prefs 不是 Compose State）。
+     */
+    var accountInfo by mutableStateOf<AccountInfo?>(null)
+        private set
+
+    /**
+     * 一卡通**真实余额**。null = 拿不到（没签约免密支付、或者还没拉过），
+     * 这时界面回退到「初始余额 − 账单消费」的本地估算。
+     *
+     * 初值取 Prefs 里上次拉到的值：从桌面小组件点进账单页会**新建一个 ViewModel**，
+     * 等接口回来之前这段时间界面会退回估算、还会冒出「手动填写」按钮，
+     * 看着像数据丢了。先亮上次的值，拉到新的再覆盖。
+     */
+    var campusBalance by mutableStateOf(PrefsHelper.campusBalance.toDoubleOrNull())
+
+    /**
+     * 趣智校园钱包余额（`/account/wallet`）。
+     *
+     * 一卡通拿不到时的第二来源，见 [io.github.ranxian.muguang.data.BalanceEstimator]。
+     * 界面判断「有没有真实余额」时必须把它算进去，否则没接一卡通的学校
+     * 会被误判成「只能估算」。
+     */
+    var walletBalance by mutableStateOf(PrefsHelper.walletBalance.toDoubleOrNull())
+        private set
+
+    /**
+     * 当前账号的手机号——**界面唯一该读的地方**。
+     *
+     * 以前是 MainActivity 里一个 `rememberSaveable`，登录成功时写一次就再也不动了，
+     * 所以在「我的」页改完手机号，卡片上还显示旧的，得等下次重新登录才更新。
+     * 现在换成 ViewModel 里的状态：登录、改号、退出三处都写它，界面自动跟着刷。
+     */
+    var phone by mutableStateOf(PrefsHelper.telephone)
+
+    /**
+     * 学校名（`/project/info/triple` 的 `projectName`）。
+     *
+     * 同 [accountInfo]：写进 Prefs 不会触发重组，界面得读这个 State 才刷得出来。
+     * 初值取 Prefs，老用户不用等接口回来就有值显示。
+     */
+    var schoolName by mutableStateOf(PrefsHelper.schoolName)
+        private set
+
+    var currentProjectId by mutableStateOf(PrefsHelper.projectId)
+        private set
+
+    var currentProjectName by mutableStateOf(
+        PrefsHelper.schoolName.ifBlank { "当前项目" }
+    )
+        private set
+
+    var availableProjects by mutableStateOf<List<ServiceProject>>(emptyList())
+        private set
+
+    var projectsLoading by mutableStateOf(false)
+        private set
+
+    var projectSwitching by mutableStateOf(false)
+        private set
+
+    var projectRevision by mutableStateOf(0)
+        private set
+
+    /** 存一份 AppContext 供刷新桌面小组件用（ViewModel 不应该长期持有 Activity） */
+    private var appContext: Context? = null
+
+    fun initManagers(context: Context) {
+        appContext = context.applicationContext
+        if (scanner == null) scanner = BluetoothScanner(context, { addDevice(it) }, { ok -> onScanTimeout(ok) })
+        if (mqttManager == null) mqttManager = MqttManager(context, { handleMqttMessage(it) })
+
+        lastDeviceName = PrefsHelper.lastDeviceName
+        lastDeviceMac = PrefsHelper.lastDeviceMac
+        lastDeviceSnCode = PrefsHelper.lastDeviceSnCode
+        lastDeviceEmoji = PrefsHelper.lastDeviceEmoji
+        lastDeviceProjectId = PrefsHelper.lastDeviceProjectId
+        boundRoom = PrefsHelper.boundRoom
+
+        // 恢复所有活跃订单
+        syncActiveOrdersFromPrefs()
+    }
+
+    fun loadAvailableProjects() {
+        if (projectsLoading) return
+        projectsLoading = true
+        sessionScope().launch {
+            try {
+                val resp = ProjectRepository.loadProjects()
+                if (!resp.success) {
+                    toastMessage = resp.displayMessage ?: "读取项目列表失败"
+                    return@launch
+                }
+                val projects = resp.data.orEmpty()
+                    .mapNotNull { it.toServiceProject() }
+                    .distinctBy { it.projectId }
+                    .sortedBy { it.displayName }
+                availableProjects = projects
+
+                projects.firstOrNull { it.projectId == currentProjectId }?.let {
+                    currentProjectName = it.displayName
+                    schoolName = it.displayName
+                    PrefsHelper.schoolName = it.displayName
+                }
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                AppLogger.e("读取项目列表失败", e)
+                toastMessage = "读取项目列表失败，请检查网络"
+            } finally {
+                projectsLoading = false
+            }
+        }
+    }
+
+    fun switchProject(project: ServiceProject) {
+        if (project.projectId == currentProjectId || projectSwitching) return
+        projectSwitching = true
+        viewModelScope.launch {
+            try {
+                // Let a device command already being sent finish before changing credentials.
+                while (isStartingShower || isStopping || deductingConsumeDate != null ||
+                    backgroundBleStopJobs.values.any { it.isActive }
+                ) delay(100)
+                val previousProject = currentProjectId
+                when (val outcome = ProjectRepository.switchTo(project)) {
+                    is ProjectSwitchOutcome.Success -> {
+                        sessionJob.cancelAndJoin()
+                        sessionJob = SupervisorJob(viewModelScope.coroutineContext[Job])
+                        bleSession?.let {
+                            projectBleConnections[previousProject] = BleConnection(bleController, it)
+                        }
+                        bleController = null
+                        bleSession = null
+                        currentProjectId = outcome.project.projectId
+                        currentProjectName = outcome.project.displayName
+                        schoolName = outcome.project.displayName
+                        phone = PrefsHelper.telephone
+                        PrefsHelper.projectId = outcome.project.projectId
+                        PrefsHelper.schoolName = outcome.project.displayName
+                        resetProjectScopedState()
+                        projectBleConnections.remove(currentProjectId)?.let {
+                            bleController = it.controller
+                            bleSession = it.session
+                        }
+                        syncActiveOrdersFromPrefs()
+                        restoreProjectWasherSession()
+                        restoreBoundWasher()
+                        refreshProjectRunningOrders()
+                        startKickWatch()
+                        projectRevision++
+                        toastMessage = "已切换到「${outcome.project.displayName}」"
+
+                        refreshWallet()
+                        loadBills(forceRefresh = true)
+                        loadCampusBalance()
+                        loadUnpaidBills()
+                        loadSchoolName()
+                        loadAccountInfo()
+                        loadUseCode()
+                    }
+
+                    is ProjectSwitchOutcome.Failed -> {
+                        toastMessage = outcome.message
+                    }
+                }
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                AppLogger.e("切换项目异常", e)
+                toastMessage = "切换项目失败，请稍后重试"
+            } finally {
+                projectSwitching = false
+            }
+        }
+    }
+
+    private fun resetProjectScopedState() {
+        stopTimer()
+        mqttManager?.disconnect()
+        isShowering = false
+        isStartingShower = false
+        isStopping = false
+        showerSnCode = null
+        currentOrderNo = null
+        showerConsumed = 0.0
+        showerPreDeduct = 0.0
+        showerRemaining = "0.00"
+        showerElapsedSec = 0
+        autoDisConSec = 0
+        showerError = null
+        bleProgress = null
+        activeWasherSession = null
+        washerStatus = null
+        washerStageText = ""
+        washerRemainingSec = 0
+        washerRemainingBaseSec = 0
+        washerRemainingUpdatedAtMs = 0L
+        // 绑定关系存在 Prefs 里（按项目隔离），退出登录只清内存态；
+        // 重新登录同一项目时 restoreBoundWasher() 会恢复
+        boundWasher = null
+        boundWasherView = null
+        boundWasherRefreshing = false
+        boundWasherUpdatedAtMs = 0L
+        stopBoundWasherPoll()
+        dismissWasherModes()
+        ownerBySn.clear()
+        showAutoCloseDialog = false
+        isLoadingBills = false
+        billLoadSeq++
+        unpaidSeq++
+        scanner?.stopScan()
+        isScanning = false
+        nearbyDevices.clear()
+        queriedThisScan.clear()
+        activeDeviceSnCodes.clear()
+        selectedDevice = null
+        showDeviceDetail = false
+        bleRetryDevice = null
+
+        walletInfo = null
+        campusBalance = PrefsHelper.campusBalance.toDoubleOrNull()
+        walletBalance = PrefsHelper.walletBalance.toDoubleOrNull()
+        accountInfo = null
+        billList = emptyList()
+        billHistory = emptyList()
+        billsProjectId = ""
+        billsLoaded = false
+        unpaidBills = emptyList()
+        deductingConsumeDate = null
+        useCodeData = null
+        useCodeLoaded = false
+
+        lastDeviceName = PrefsHelper.lastDeviceName
+        lastDeviceMac = PrefsHelper.lastDeviceMac
+        lastDeviceSnCode = PrefsHelper.lastDeviceSnCode
+        lastDeviceEmoji = PrefsHelper.lastDeviceEmoji
+        lastDeviceProjectId = PrefsHelper.lastDeviceProjectId
+        boundRoom = PrefsHelper.boundRoom
+        WidgetBridge.clearBusy()
+        appContext?.let { MuguangWidget.refreshAll(it) }
+    }
+
+    /** Refresh only this project's saved orders; a failed request must retain recovery data. */
+    private fun refreshProjectRunningOrders() {
+        sessionScope().launch {
+            for (order in ActiveOrderRepository.forProject()) {
+                if (PrefsHelper.isBleDevice(order.snCode)) continue
+                try {
+                    val resp = NetworkModule.apiService.queryUsingSafe(
+                        snCode = order.snCode, auth = NetworkModule.authFields()
+                    )
+                    if (resp.success || resp.errorCode == 307) {
+                        if (resp.data?.isOwner == false ||
+                            (resp.success && resp.data?.orderNo == null && resp.errorCode != 307)
+                        ) {
+                            ShowerController.markFinished(order.snCode)
+                        } else {
+                            ActiveOrderRepository.replace(order.copy(
+                                orderNo = resp.data?.orderNo?.takeIf { it.isNotBlank() } ?: order.orderNo
+                            ))
+                        }
+                    }
+                } catch (e: CancellationException) {
+                    throw e
+                } catch (e: Exception) {
+                    AppLogger.e("刷新项目运行订单失败", e)
+                }
+            }
+            syncActiveOrdersFromPrefs()
+        }
+        activeWasherSession?.let { session ->
+            sessionScope().launch {
+                val status = WasherController.status(session.device) ?: return@launch
+                if (status.isOwner && status.looksActive) applyWasherStatus(status)
+                else finishWasherState()
+            }
+        }
+        appContext?.let { ctx ->
+            ActiveOrderRepository.forProject().forEach { ShowerWatchService.start(ctx, it.snCode) }
+        }
+    }
+
+    /** A notification can stop a previous project's BLE device without changing the visible project. */
+    private fun stopBackgroundBleOrder(snCode: String) {
+        if (backgroundBleStopJobs[snCode]?.isActive == true) return
+        val ctx = appContext ?: return
+        val order = ActiveOrderRepository.find(snCode) ?: return
+        val auth = ActiveOrderRepository.sessionFor(snCode)
+        val job = viewModelScope.launch(auth.contextElement(), start = CoroutineStart.LAZY) {
+            val saved = projectBleConnections[auth.projectId]
+            val session = saved?.session ?: runCatching {
+                gson.fromJson(PrefsHelper.bleSessionJson, BleShowerController.Session::class.java)
+            }.getOrNull()?.takeIf { it.snCode == snCode } ?: return@launch
+            if (!BleArbiter.begin(snCode, "app")) return@launch
+            val ble = saved?.controller ?: BleController(ctx)
+            try {
+                if (saved?.controller == null && ble.connect(session.mac) !is BleConnectResult.Ready) {
+                    Notifier.showCloseFailed(ctx, order.deviceName, "蓝牙连接失败，请靠近设备后重试")
+                    return@launch
+                }
+                when (val outcome = BleShowerController.closeAndSettle(
+                    ble, session, auth.loginCode, auth.telephone
+                )) {
+                    is BleShowerController.SettleOutcome.Completed,
+                    is BleShowerController.SettleOutcome.PartialSettlement -> {
+                        val elapsed = ShowerController.elapsedSeconds(snCode)
+                        val money = (outcome as? BleShowerController.SettleOutcome.Completed)
+                            ?.rawUpMoney?.let(MoneyFormat::milliToYuan)
+                        ShowerController.markFinished(snCode)
+                        PrefsHelper.bleSessionJson = ""
+                        projectBleConnections.remove(auth.projectId)
+                        if (money != null && money > 0) PrefsHelper.recordConsume(snCode, money)
+                        Notifier.showFinished(ctx, order.deviceName, elapsed, money)
+                        ShowerEvents.notifyFinished(ShowerEvents.Finished(
+                            snCode, order.deviceName, elapsed, money, autoClosed = false
+                        ))
+                        ble.disconnect()
+                    }
+                    is BleShowerController.SettleOutcome.CloseFailed ->
+                        Notifier.showCloseFailed(ctx, order.deviceName, outcome.message)
+                }
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                AppLogger.e("停止其他项目蓝牙设备失败", e)
+                Notifier.showCloseFailed(ctx, order.deviceName, "关闭未确认，请靠近设备后重试")
+            } finally {
+                if (saved?.controller == null) ble.disconnect()
+                BleArbiter.end(snCode)
+                endStopAttempt()
+            }
+        }
+        backgroundBleStopJobs[snCode] = job
+        job.invokeOnCompletion { backgroundBleStopJobs.remove(snCode) }
+        job.start()
+    }
+
+    override fun onCleared() {
+        super.onCleared()
+        BleArbiter.appAlive = false
+        stopTimer()
+        sessionJob.cancel()
+        mqttManager?.disconnect(); scanner?.stopScan()
+    }
+
+    fun startScan() {
+        if (projectSwitching) return
+        nearbyDevices.clear(); activeDeviceSnCodes.clear()
+        // 新一轮扫描 = 允许对每台设备再查一次（见 addDevice）
+        queriedThisScan.clear()
+        val bleScanner = scanner
+        if (bleScanner == null) {
+            // 此前是 `scanner?.startScan()`：scanner 为空时直接把 isScanning 置 true
+            // 就返回，没有任何回调会把它复位，界面永远停在「扫描中…」，
+            // 连「附近没有设备」的空状态都显示不出来。
+            isScanning = false
+            AppLogger.w("启动扫描失败：BluetoothScanner 未初始化")
+            return
+        }
+        isScanning = true; scanStartTime = System.currentTimeMillis(); bleScanner.startScan()
+    }
+    /**
+     * 扫描结束。
+     *
+     * @param ok 是否正常扫完。**只有正常扫完才更新小组件的快照**——
+     *           扫描失败（蓝牙被关、适配器异常）时结果为空是"没扫成"，不是"附近没有设备"，
+     *           拿它去覆盖会把上次扫到的好数据清空，小组件就白白变成「未发现热水器」了。
+     */
+    fun onScanTimeout(ok: Boolean) {
+        val e = System.currentTimeMillis() - scanStartTime
+        if (e < 600) sessionScope().launch { delay(600 - e); isScanning = false }
+        else isScanning = false
+        if (!ok) return
+
+        // ⚠️ 扫描**结束后**才按信号强度排一次序。
+        //
+        // 原先列表是纯插入顺序（谁先被扫到谁在前面）。寝室场景只有一两台设备时无所谓，
+        // 但**公共澡堂**完全不是这回事：一间屋十二个位置、几个屋子连在一起，
+        // 一次能扫到几十上百台，按扫描顺序排列等于让用户在一堆设备名里大海捞针，
+        // 根本找不到自己站的那个位置。
+        //
+        // 按 RSSI 降序后排在最前面的，就是离手机最近的那一台——澡堂里也就是
+        // 用户面前这个位置，通常正是他要开的那个。
+        //
+        // ⚠️ **必须是扫描结束后排，不能实时排**。扫描过程中 RSSI 一直在小幅波动，
+        // 实时重排会让列表不停跳动，用户正要点的时候被挪走，直接点错设备——
+        // 点错在澡堂里意味着替别人付了水费。结束后排一次既有正确的顺序，又不会跳。
+        val sorted = nearbyDevices.sortedByDescending { it.rssi }
+        nearbyDevices.clear()
+        nearbyDevices.addAll(sorted)
+
+        cacheNearbyForWidget()
+    }
+
+    // ── 扫码绑定 ──
+    fun scanBind(snCode: String) {
+        sessionScope().launch {
+            try {
+                val resp = DeviceInfoCache.load(snCode)
+                if (resp.success && resp.data != null) {
+                    val info = resp.data
+                    // 保存为上次使用设备
+                    PrefsHelper.lastDeviceSnCode = info.snCode
+                    PrefsHelper.lastDeviceMac = info.macAddress
+                    PrefsHelper.lastDeviceName = info.displayName
+                    PrefsHelper.lastDeviceRawName = info.deviceName   // 寝室筛选用，见 PrefsHelper
+                    PrefsHelper.lastDeviceEmoji = info.typeEmoji
+                    PrefsHelper.lastDeviceProjectId = currentProjectId
+                    // 弹出设备详情
+                    selectedDevice = info; showDeviceDetail = true
+                    refreshDeviceStatus(info.snCode)
+                    // 停止扫描（避免设备详情弹出后列表还在跳）
+                    scanner?.stopScan(); isScanning = false
+                } else {
+                    toastMessage = resp.displayMessage ?: "未找到该设备"
+                    checkKick(resp.displayMessage)
+                }
+            } catch (e: Exception) {
+                checkKickEx(e)
+                val msg = e.message ?: ""
+                toastMessage = if (msg.contains("Unable to resolve host", ignoreCase = true) ||
+                    msg.contains("No address associated", ignoreCase = true) ||
+                    msg.contains("Network is unreachable", ignoreCase = true) ||
+                    msg.contains("Failed to connect", ignoreCase = true)) {
+                    "网络连接失败，请检查网络设置"
+                } else {
+                    "查询设备失败"
+                }
+            }
+        }
+    }
+
+    // ── 点击设备 ──
+    //
+    // ⚠️ 这条路径**不能静默失败**。
+    //
+    // `/device/info/mac` 查不到设备时返回的是
+    // `success=true, errorCode=0, errorMessage="成功", data=null`——它既不是网络错误，
+    // 也不是"报错"，只是服务端说"没有这台设备"。而老代码的失败分支只调了 [checkKick]，
+    // 它只认「登录 / token / 失效 / 过期 / 认证」这类词，"成功"一个都不匹配，
+    // 于是**既不弹窗、也不提示、也没有日志**：用户点一次设备卡片，屏幕上什么都不发生。
+    // 用户报的「点击热水器卡片跳不到开关页面」就是这个观感。
+    //
+    // 现在三种结果分开说：查到了 → 弹详情；服务端说没有这台设备 → 明说；
+    // 服务端明确报错 → 把原话转给用户。
+    fun fetchDeviceInfo(mac: String) {
+        val cached = nearbyDevices.find { it.mac == mac }?.deviceInfo
+        if (cached != null) {
+            selectedDevice = cached; showDeviceDetail = true
+            sessionScope().launch { refreshDeviceStatus(cached.snCode) }
+            return
+        }
+        sessionScope().launch {
+            try {
+                val resp = DeviceInfoCache.load(mac)
+                if (resp.success && resp.data != null) {
+                    selectedDevice = resp.data; showDeviceDetail = true
+                    refreshDeviceStatus(resp.data.snCode)
+                } else {
+                    checkKick(resp.displayMessage)
+                    toastMessage = when {
+                        // 服务端明确报错（被挤下线由上面的 checkKick 负责），照原话说
+                        !resp.success -> resp.displayMessage ?: "获取设备信息失败，请稍后重试"
+                        // success=true 但 data=null：服务端确认没有登记这台设备
+                        else -> "服务端没有这台设备的记录（$mac）"
+                    }
+                }
+            } catch (e: Exception) {
+                checkKickEx(e)
+                val msg = e.message ?: ""
+                toastMessage = if (msg.contains("Unable to resolve host", ignoreCase = true) ||
+                    msg.contains("No address associated", ignoreCase = true) ||
+                    msg.contains("Network is unreachable", ignoreCase = true) ||
+                    msg.contains("Failed to connect", ignoreCase = true)) {
+                    "网络连接失败，请检查网络设置"
+                } else {
+                    // 以前这里什么都不说，异常被整个吞掉，同样是"点了没反应"
+                    "获取设备信息失败，请稍后重试"
+                }
+            }
+        }
+    }
+
+    private suspend fun refreshDeviceStatus(snCode: String) {
+        val requestProject = NetworkModule.currentProjectId()
+        val known = nearbyDevices.firstOrNull { it.deviceInfo?.snCode == snCode }?.deviceInfo
+            ?: selectedDevice?.takeIf { it.snCode == snCode }
+        if (known?.isWasher == true) {
+            val st = WasherController.status(known) ?: return
+            if (NetworkModule.currentProjectId() != requestProject) return
+            ownerBySn[snCode] = st.isOwner
+            if (st.looksActive && st.isOwner) {
+                activeDeviceSnCodes.add(snCode)
+                clearOccupiedIfStale(snCode)
+            }
+            return
+        }
+        try {
+            val q = NetworkModule.apiService.queryUsingSafe(snCode = snCode, auth = NetworkModule.authFields())
+            if (NetworkModule.currentProjectId() != requestProject) return
+            if (q.errorCode == 307 || (q.success && q.data?.orderNo != null)) {
+                activeDeviceSnCodes.add(snCode)
+                // ⚠️ 按 snCode 记录归属（不能写全局变量：异步响应会串到别的设备上）
+                val owner = q.data?.isOwner ?: true
+                ownerBySn[snCode] = owner
+                // 只有自己的订单才加入 activeOrders
+                if (owner && activeOrders.none { it.snCode == snCode }) {
+                    val orderNo = q.data?.orderNo ?: ""
+                    val deviceInfo = nearbyDevices.find { it.deviceInfo?.snCode == snCode }?.deviceInfo
+                    if (deviceInfo != null) {
+                        ActiveOrderRepository.upsert(ActiveOrder(
+                            snCode, orderNo, deviceInfo.displayName, deviceInfo.macAddress,
+                            deviceInfo.typeEmoji, deviceInfo.withholdMoney, currentProjectId
+                        ))
+                        syncActiveOrdersFromPrefs()
+                    }
+                }
+                // 设备上确实有订单，且**是自己的** → 之前那个「占用中」已经不成立了。
+                // （不是自己的就是真被占着，标记该留着，不用管。）
+                if (owner) clearOccupiedIfStale(snCode)
+            } else {
+                // 服务端说这台上**没有订单**：不管之前记没记过「占用中」，现在都空了。
+                ownerBySn[snCode] = true
+                clearOccupiedIfStale(snCode)
+            }
+        } catch (e: Exception) {
+            // 以前整个吞掉：占用状态查不到时界面上既不报错也没有日志，
+            // 用户只看到设备永远「占用中」，无从排查
+            AppLogger.w("刷新设备占用状态失败（$snCode）：${e.message}")
+        }
+    }
+
+    /**
+     * 这台设备已经不归「占用中」管了，就把标记清掉并让桌面跟着刷。
+     *
+     * 补的是这么一条路径：小组件上点开阀被拒 → 桌面记下「占用中」→ 用户打开 App
+     * 点进设备详情 → `refreshDeviceStatus` 已经查到设备空了 → **但小组件那边没人通知**，
+     * 桌面会一直挂着「占用中」，直到用户再去点一次小组件的开水按钮。
+     *
+     * 现在 App 这边一旦确认设备空了就顺手把它抹掉。`PrefsHelper` 里还有一个
+     * 3 分钟的兜底失效，防的是「用户此后既不打开 App、也不点小组件」那种情况。
+     */
+    private fun clearOccupiedIfStale(snCode: String) {
+        if (PrefsHelper.occupiedSnCode != snCode) return
+        PrefsHelper.clearOccupied()
+        AppLogger.i("设备已空闲（$snCode），清掉小组件的「占用中」标记")
+        refreshWidgets()
+    }
+
+    fun startLastDevice(phone: String) {
+        if (projectSwitching) return
+        if (lastDeviceProjectId != currentProjectId) {
+            toastMessage = "上次设备属于其他项目，请切换项目后使用"
+            return
+        }
+        val sn = lastDeviceSnCode.ifEmpty { return }
+        // 找对应的活跃订单
+        val order = activeOrders.find { it.snCode == sn }
+        if (order != null) {
+            sessionScope().launch {
+                try {
+                    val resp = DeviceInfoCache.load(order.deviceMac)
+                    if (resp.success && resp.data != null) {
+                        selectedDevice = resp.data; startShower(phone)
+                    } else {
+                        toastMessage = "获取设备信息失败"
+                    }
+                } catch (e: Exception) {
+                    toastMessage = "获取设备信息失败"
+                }
+            }
+            return
+        }
+        val mac = lastDeviceMac.ifEmpty { return }
+        sessionScope().launch {
+            try {
+                val resp = DeviceInfoCache.load(mac)
+                if (resp.success && resp.data != null) {
+                    selectedDevice = resp.data; startShower(phone)
+                } else {
+                    toastMessage = "获取设备信息失败"
+                }
+            } catch (e: Exception) {
+                toastMessage = "获取设备信息失败"
+            }
+        }
+    }
+
+    // ════════════════════════════════════════════
+    fun startShower(phone: String) {
+        if (projectSwitching) return
+        val device = selectedDevice ?: return
+        val snCode = device.snCode
+        if (snCode.isNullOrBlank()) { showerError = ShowerError("设备信息不完整", ShowerErrorKind.BAD_DEVICE); return }
+
+        if (device.isLaundry) {
+            if (activeWasherSession?.device?.snCode == snCode) {
+                restoreWasherScreen()
+                return
+            }
+            loadWasherModes(device)
+            return
+        }
+
+        isStartingShower = true
+        sessionScope().launch {
+            try {
+                showerError = null
+                showerSnCode = snCode
+
+                // ① 用户之前确认过这台需要蓝牙（或服务端明确标了 isBle）→ 直接走蓝牙，
+                //    不再白试一次云端、再吃一句 306
+                // ② 否则按普通设备走云端；万一回 306，会在下面弹框问用户要不要改用蓝牙
+                if (device.needsBluetoothControl || PrefsHelper.isBleDevice(snCode)) {
+                    startBleShower(device, phone, snCode)
+                    return@launch
+                }
+
+                // 「查询是否已有订单 → 开阀 → 轮询确认 → 落盘」这套流程在 ShowerController 里，
+                // 桌面小组件也走同一份逻辑；这里只负责 MQTT、界面状态与结果提示
+                mqttManager?.connect(phone)
+                val outcome = ShowerController.openValve(snCode, device)
+
+                when (outcome) {
+                    is OpenOutcome.Resumed -> {
+                        syncActiveOrdersFromPrefs()
+                        // 恢复订单：从持久化恢复自动关停剩余时间
+                        enterShowerState(outcome.orderNo, snCode, device, PrefsHelper.getAutoDisconRemain(snCode))
+                    }
+
+                    is OpenOutcome.Opened -> {
+                        syncActiveOrdersFromPrefs()
+                        enterShowerState(null, snCode, device, outcome.autoDiscon)
+                        startOrderPoll(snCode)
+                    }
+
+                    /**
+                     * 设备被别人用着。
+                     *
+                     * App 内正常情况下走不到这里——设备详情弹窗早就用 `isOwner`
+                     * 把按钮置灰了。留着这个分支是为了：万一以后从别的入口绕进来
+                     * （比如扫码头、小组件深链），也不会把别人的订单当成自己的。
+                     */
+                    is OpenOutcome.InUseByOthers -> {
+                        showerError = ShowerError(outcome.message, ShowerErrorKind.IN_USE_BY_OTHERS)
+                        mqttManager?.disconnect()
+                    }
+
+                    is OpenOutcome.Failed -> {
+                        // 306「设备不在线」：**这台很可能就是蓝牙表**（云端到不了它）。
+                        // 弹框问用户要不要改用手机蓝牙——这是唯一可靠的判别方式：
+                        // 服务端不给字段、参考项目也不判断，只有用户站在设备旁才知道。
+                        if (outcome.errorCode == ERROR_DEVICE_OFFLINE &&
+                            device.macAddress.isNotBlank()
+                        ) {
+                            bleRetryDevice = device
+                        }
+                        showerError = ShowerError(outcome.message, ShowerErrorKind.SERVER_REJECTED)
+                        checkKick(outcome.kickHint)
+                        mqttManager?.disconnect()
+                    }
+
+                    OpenOutcome.Unknown -> {
+                        // App 内调用给了充足预算，理论上不会走到这；保守起见按未确认处理
+                        showerError = ShowerError(
+                            "开阀未确认成功，请确认热水器是否已开启",
+                            ShowerErrorKind.UNKNOWN_RESULT
+                        )
+                        mqttManager?.disconnect()
+                    }
+                }
+            } catch (e: Exception) {
+                checkKickEx(e)
+                if (!isShowering) {
+                    showerError = ShowerError(e.message ?: "网络错误", ShowerErrorKind.NETWORK)
+                }
+            } finally { isStartingShower = false }
+        }
+    }
+
+    fun loadWasherModes(device: DeviceInfo) {
+        if (projectSwitching) return
+        showerError = null
+        washerModePickerDevice = device
+        washerModes.clear()
+        isLoadingWasherModes = true
+        sessionScope().launch {
+            try {
+                val resp = WasherController.loadModes(device)
+                if (!resp.success) {
+                    showerError = ShowerError(
+                        resp.displayMessage ?: "读取洗衣机模式失败",
+                        ShowerErrorKind.WASHER_REJECTED
+                    )
+                    washerModePickerDevice = null
+                    return@launch
+                }
+                washerModes.addAll(washerMainModes(resp.data.orEmpty()))
+                if (washerModes.isEmpty()) {
+                    showerError = ShowerError(
+                        "当前项目没有可用的洗衣机模式，请确认已切换到有洗衣业务的项目",
+                        ShowerErrorKind.WASHER_REJECTED
+                    )
+                    washerModePickerDevice = null
+                }
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                AppLogger.e("读取洗烘模式失败", e)
+                showerError = ShowerError(
+                    "读取洗衣机模式失败，请检查网络",
+                    ShowerErrorKind.WASHER_REJECTED
+                )
+                washerModePickerDevice = null
+            } finally {
+                isLoadingWasherModes = false
+            }
+        }
+    }
+
+    fun dismissWasherModes() {
+        washerModePickerDevice = null
+        washerModes.clear()
+        isLoadingWasherModes = false
+    }
+
+    fun startWasherMode(mode: WasherMode) {
+        if (projectSwitching) return
+        val device = washerModePickerDevice ?: return
+        if (isStartingShower) return
+        showerError = null
+        isStartingShower = true
+        bleProgress = "正在启动「${mode.displayName}」…"
+        sessionScope().launch {
+            try {
+                when (val outcome = WasherController.start(device, mode)) {
+                    is WasherStartOutcome.Started -> {
+                        washerModePickerDevice = null
+                        washerModes.clear()
+                        enterWasherState(outcome.session, outcome.status)
+                        toastMessage = "设备已启动：${mode.displayName}"
+                    }
+
+                    is WasherStartOutcome.Resumed -> {
+                        washerModePickerDevice = null
+                        washerModes.clear()
+                        enterWasherState(outcome.session, outcome.status)
+                        toastMessage = "已恢复到当前洗衣订单"
+                    }
+
+                    is WasherStartOutcome.InUseByOthers -> {
+                        showerError = ShowerError(outcome.message, ShowerErrorKind.IN_USE_BY_OTHERS)
+                    }
+
+                    is WasherStartOutcome.Failed -> {
+                        showerError = ShowerError(
+                            outcome.message,
+                            ShowerErrorKind.WASHER_REJECTED
+                        )
+                    }
+                }
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                AppLogger.e("启动洗烘设备异常", e)
+                showerError = ShowerError(
+                    "启动洗衣机失败，请检查网络",
+                    ShowerErrorKind.WASHER_REJECTED
+                )
+            } finally {
+                isStartingShower = false
+                bleProgress = null
+            }
+        }
+    }
+
+    private fun enterWasherState(session: WasherSession, initialStatus: WasherStatus?) {
+        activeWasherSession = session
+        PrefsHelper.washerSessionJson = gson.toJson(session)
+        selectedDevice = session.device
+        isShowering = true
+        isStopping = false
+        showerElapsedSec = 0
+        showerPreDeduct = session.preDeductYuan.takeIf { it > 0 } ?: session.device.withholdMoney
+        showerRemaining = MoneyFormat.format(showerPreDeduct)
+        // 先按模式总时长兜底，让每秒倒数立刻有基准；首次状态回来后会覆盖
+        washerRemainingBaseSec = session.mode.times.coerceAtLeast(0)
+        washerRemainingUpdatedAtMs = System.currentTimeMillis()
+        washerRemainingSec = washerRemainingBaseSec
+        applyWasherStatus(initialStatus)
+
+        lastDeviceName = session.device.displayName
+        lastDeviceMac = session.device.macAddress
+        lastDeviceSnCode = session.device.snCode
+        lastDeviceEmoji = session.device.typeEmoji
+        lastDeviceProjectId = currentProjectId
+        PrefsHelper.lastDeviceName = session.device.displayName
+        PrefsHelper.lastDeviceMac = session.device.macAddress
+        PrefsHelper.lastDeviceSnCode = session.device.snCode
+        PrefsHelper.lastDeviceEmoji = session.device.typeEmoji
+        PrefsHelper.lastDeviceProjectId = currentProjectId
+        PrefsHelper.lastDeviceRawName = session.device.deviceName
+        PrefsHelper.lastDeviceTypeName = session.device.typeLabel
+        PrefsHelper.lastDeviceWithholdMoney = showerPreDeduct.toFloat()
+
+        timerJob?.cancel()
+        timerJob = sessionScope().launch {
+            while (activeWasherSession != null) {
+                delay(1000)
+                showerElapsedSec = ((System.currentTimeMillis() - session.startedAtMs) / 1000)
+                    .toInt().coerceAtLeast(0)
+                // 每秒按上次服务端观测值本地递减；轮询回来时 applyWasherStatus
+                // 会重置基准，所以不会重复扣减。
+                washerRemainingSec = BoundWasherState.countdown(
+                    washerRemainingBaseSec,
+                    washerRemainingUpdatedAtMs,
+                    System.currentTimeMillis()
+                )
+            }
+        }
+        startWasherPoll(session.device.snCode)
+    }
+
+    private fun applyWasherStatus(status: WasherStatus?) {
+        if (status == null) {
+            washerStageText = activeWasherSession?.mode?.displayName ?: "设备运行中"
+            return
+        }
+        washerStatus = status
+        washerStageText = status.stageText
+        washerRemainingSec = when {
+            status.time > 0 -> status.time
+            status.modeTime > 0 -> {
+                val elapsed = activeWasherSession?.let {
+                    ((System.currentTimeMillis() - it.startedAtMs) / 1000).toInt()
+                } ?: 0
+                (status.modeTime - elapsed).coerceAtLeast(0)
+            }
+            else -> 0
+        }
+        // 新观测值到达：重置倒计时基准，供每秒的本地递减使用
+        washerRemainingBaseSec = washerRemainingSec
+        washerRemainingUpdatedAtMs = System.currentTimeMillis()
+    }
+
+    private fun startWasherPoll(snCode: String) {
+        washerPollJob?.cancel()
+        washerPollJob = sessionScope().launch {
+            while (activeWasherSession != null) {
+                delay(3_000)
+                // 挤号后凭据被清、会话却被刻意保留（preserveActiveRecovery）：
+                // 这时发请求拿不到真实状态，不能据此结束会话。
+                // 用户重新登录后同一循环会恢复正常检查。
+                if (!PrefsHelper.isLoggedIn) continue
+                val snapshot = WasherController.status(activeWasherSession?.device ?: break) ?: continue
+                // 只有「本人名下 + 确实在跑」才继续沿用会话，判断与
+                // refreshProjectRunningOrders 保持一致。
+                //
+                // 老代码对空闲状态（errorCode 0 → data 为 null → isOwner=true、
+                // looksActive=false）也照样 applyWasherStatus，会话与 washerSessionJson
+                // 都不清：首页永远停在「使用中」，退出登录也被「设备使用中」永久拦住。
+                // 归属变成他人时同理——这一单已经不属于本机，保留会话只会锁死界面。
+                if (!snapshot.isOwner && snapshot.looksActive) {
+                    AppLogger.w("洗衣机订单归属已变化，清理本机会话：${activeWasherSession?.device?.snCode}")
+                }
+                if (snapshot.isOwner && snapshot.looksActive) applyWasherStatus(snapshot)
+                else finishWasherState()
+            }
+        }
+    }
+
+    private fun finishWasherState() {
+        washerPollJob?.cancel()
+        washerPollJob = null
+        timerJob?.cancel()
+        timerJob = null
+        activeWasherSession = null
+        // 会话是全局唯一的（一次只能洗一台），残留记录必须全项目清掉：
+        // hasWasherSession() 扫所有项目的键，只清当前项目会让退出登录被永久拦住
+        PrefsHelper.clearAllWasherSessions()
+        washerStatus = null
+        washerStageText = ""
+        washerRemainingSec = 0
+        washerRemainingBaseSec = 0
+        washerRemainingUpdatedAtMs = 0L
+        isShowering = false
+        isStopping = false
+    }
+
+    /**
+     * 蓝牙表开阀。
+     *
+     * 与 [startShower] 主体（4G 表）的区别：
+     *
+     * | | 4G 表 | 蓝牙表 |
+     * |---|---|---|
+     * | 连接 | 无需连接 | **必须先连上设备**，还要保持在范围内 |
+     * | 耗时 | 1~2 秒 | 数秒（连接 + 等状态帧 + 下费率 + 写费率包） |
+     * | MQTT | 用来收实时消费 | **用不上**（蓝牙表不走 MQTT） |
+     * | 自动关停 | 服务端下发时间 | 设备自己管 |
+     *
+     * ⚠️ 这里**不 disconnect**——连接要留给后面的关阀用。
+     * 蓝牙表的阀是手机开的，断开连接就再也关不上了。
+     */
+    private suspend fun startBleShower(device: DeviceInfo, phone: String, snCode: String) {
+        val ctx = appContext
+        if (ctx == null) {
+            showerError = ShowerError("应用上下文丢失，请重试", ShowerErrorKind.UNKNOWN_RESULT)
+            return
+        }
+
+        // 蓝牙通道互斥：小组件服务可能正在操作同一台设备，两边同时 connectGatt 会互抢连接
+        if (!BleArbiter.begin(snCode, "app")) {
+            showerError = ShowerError("该设备正在处理其他蓝牙操作，请稍候再试", ShowerErrorKind.UNKNOWN_RESULT)
+            return
+        }
+
+        val ble = bleController ?: BleController(ctx).also { bleController = it }
+
+        bleProgress = "正在连接设备…"
+        val result = try {
+            BleShowerController.openValve(
+                ble = ble,
+                device = device,
+                loginCode = PrefsHelper.loginCode,
+                telephone = phone
+            )
+        } catch (t: Throwable) {
+            AppLogger.e("蓝牙开阀异常", t)
+            null
+        } finally {
+            // 临界区（连设备 + 开阀）结束即释放，后面的状态处理不需要独占
+            BleArbiter.end(snCode)
+        }
+        bleProgress = null
+
+        when (result) {
+            is BleShowerController.OpenOutcome.Opened -> {
+                bleSession = result.session
+                // 会话落盘：小组件服务是另一个入口，关阀时要读它（App 退出也能关阀）
+                PrefsHelper.bleSessionJson = gson.toJson(result.session)
+                // ✅ 开阀成功 ⇒ 这台**确实**是蓝牙表，记下来，以后直接走蓝牙
+                PrefsHelper.markBleDevice(snCode)
+                AppLogger.i("蓝牙开阀成功，进入使用页")
+                // 蓝牙表没有服务端下发的自动关停时间，第四项传 0
+                enterShowerState(null, snCode, device, 0)
+            }
+
+            is BleShowerController.OpenOutcome.Resumed -> {
+                // 恢复用水：设备本来就在出水，不再写费率包、不再重新开阀。
+                // 沿用当前 BLE 连接（session）进入使用页，让用户能继续计时、也能关阀。
+                bleSession = result.session
+                PrefsHelper.bleSessionJson = gson.toJson(result.session)
+                AppLogger.i("蓝牙恢复用水，进入使用页")
+                enterShowerState(null, snCode, device, 0)
+            }
+
+            is BleShowerController.OpenOutcome.Recovered -> {
+                // 补结算完成：上一笔遗留账单已结清，但设备要等下次 rateOrder 才生成新
+                // randomNumber，立刻开阀会 226。用 toast 温和提示，让用户重新点开阀。
+                AppLogger.i("蓝牙补结算完成，提示重新开阀")
+                releaseBle()
+                toastMessage = result.message
+            }
+
+            is BleShowerController.OpenOutcome.NotBleDevice -> {
+                // 连上了但没有水控服务 ⇒ 用户当初猜错了。
+                // **自动撤销标记**，以后不再对这台设备尝试蓝牙——
+                // 否则用户每次开阀都要白等一次连接超时。
+                PrefsHelper.unmarkBleDevice(snCode)
+                showerError = ShowerError(
+                    "这台设备不支持蓝牙控制，已切回普通方式，请重试",
+                    ShowerErrorKind.BAD_DEVICE
+                )
+                releaseBle()
+            }
+
+            is BleShowerController.OpenOutcome.Failed -> {
+                // ⚠️ 这里**不撤销标记**：可能是走远了、设备忙、蓝牙没开，
+                // 但设备本身大概率确实是蓝牙表。撤销了反而要用户重新确认一遍。
+                showerError = ShowerError(result.message, ShowerErrorKind.SERVER_REJECTED)
+                releaseBle()
+            }
+
+            is BleShowerController.OpenOutcome.Unconfirmed -> {
+                showerError = ShowerError(result.message, ShowerErrorKind.UNKNOWN_RESULT)
+                // ⚠️ **故意不断开**：费率包可能已经写进设备、水正在流，
+                // 断开等于把唯一的关阀通道也扔掉了。留在使用页让用户能停。
+            }
+
+            null -> {
+                showerError = ShowerError("蓝牙开阀失败，请重试", ShowerErrorKind.NETWORK)
+                releaseBle()
+            }
+        }
+    }
+
+    /**
+     * 释放蓝牙连接。
+     *
+     * ⚠️ 只在**确定没有进行中的用水**时调用。蓝牙表断开后无法再关阀，
+     * 所以「开阀未确认」那种情况必须保留连接。
+     */
+    private fun releaseBle() {
+        bleController?.disconnect()
+        bleController = null
+        bleSession = null
+        // 会话已结束/失效，落盘那份也要清——否则小组件会拿一条过期会话去关阀
+        PrefsHelper.bleSessionJson = ""
+    }
+
+    /**
+     * 桌面上有小组件时刷新一下。
+     * 小组件自己不持有状态、每次都从 Prefs 现读，所以这里只要推它重绘即可。
+     */
+    private fun refreshWidgets() {
+        appContext?.let { MuguangWidget.refreshAll(it) }
+    }
+
+    /**
+     * 把账单快照存给小组件。
+     * 小组件自己拉不了账单，2x4 的「账单」页读的就是这份数据，界面上会标同步时间。
+     */
+    private fun cacheBillsForWidget(recent: List<BillItem>) {
+        val list = recent.map { b ->
+            CachedBill(
+                emoji = b.consumeBillDTO.deviceEmoji,
+                name = b.consumeBillDTO.displayDesc,
+                timeText = b.consumeBillDTO.consumeDate.take(16),
+                moneyText = "-¥ " + b.consumeBillDTO.consumeMoney,
+                // 原始值一并存下来：小组件的余额估算要拿它们做减法，
+                // 靠上面那两个格式化字符串反解是解不出来的
+                rawTimeMs = BalanceEstimator.billTimeMs(b.consumeBillDTO.consumeDate),
+                rawMoney = b.consumeBillDTO.consumeMoney.toDoubleOrNull() ?: 0.0
+            )
+        }
+        PrefsHelper.widgetBillJson = gson.toJson(list)
+        PrefsHelper.widgetBillTime = System.currentTimeMillis()
+    }
+
+    /**
+     * 把附近设备快照存给小组件。
+     *
+     * **空结果也要写**：小组件靠 `widgetNearbyTime` 区分「扫过但附近没有」和「压根没扫过」，
+     * 前者显示「未发现热水器」（和 App 首页一致），后者才提示回 App 扫一次。
+     * 之前空结果直接 return，两种情况在桌面上长得一模一样。
+     *
+     * ⚠️ **不在这里按寝室过滤，也不在这里 `take(2)`**，两个都是坑：
+     *
+     * - 过滤搬到这里 = 快照被绑定的瞬间冻住。用户改绑寝室后，桌面上要等到**下次扫描**
+     *   才跟着变，中间这段时间显示的是上一个寝室的设备。
+     *   过滤放在小组件渲染时做，改绑定立刻生效。
+     * - `take(2)` 放在这里 = **在过滤之前截断**。小组件只能显示 2 行，要是扫到的前两台
+     *   恰好都是别的寝室，而本寝室的在第 3 台之后，过滤完就是空的——桌面显示
+     *   「未发现热水器」，可用户寝室里明明有设备。
+     *
+     * 所以这里存**全量**（BLE 扫描一般就几台，几百字节），筛选和截断都留给渲染时。
+     */
+    private fun cacheNearbyForWidget() {
+        val list = nearbyDevices.map { d ->
+            CachedDevice(
+                emoji = d.typeEmoji,
+                name = d.displayName,
+                // 设备信息还没拉到时用名字兜底，保证小字那行不会是空的
+                desc = d.deviceInfo?.typeLabel
+                    ?: if (d.name.startsWith("洗手台")) "洗手台热水器" else "卫生间热水器",
+                rssi = d.rssi,
+                mac = d.mac,
+                // 原始名，寝室筛选用。注意和 name 不是一回事
+                rawName = d.deviceInfo?.deviceName ?: d.name
+            )
+        }
+        PrefsHelper.widgetNearbyJson = gson.toJson(list)
+        PrefsHelper.widgetNearbyTime = System.currentTimeMillis()
+    }
+
+    /**
+     * 把活跃订单从 Prefs 重新读回内存。
+     * Prefs 是唯一事实来源——ShowerController 可能在没有这个 ViewModel 的情况下改过它
+     * （例如用户在桌面小组件里开了阀）。
+     */
+    private fun syncActiveOrdersFromPrefs() {
+        val saved = ActiveOrderRepository.forProject(currentProjectId)
+        activeOrders.clear(); activeOrders.addAll(saved)
+        activeDeviceSnCodes.clear(); saved.forEach { activeDeviceSnCodes.add(it.snCode) }
+    }
+
+    /** 开阀后订单号还没生成，轮询把它补上 */
+    private fun startOrderPoll(snCode: String) {
+        orderPollJob?.cancel()
+        orderPollJob = sessionScope().launch {
+            for (i in 0..10) {
+                delay(800)
+                if (currentOrderNo != null) break
+                try {
+                    val p = NetworkModule.apiService.queryUsingSafe(snCode = snCode, auth = NetworkModule.authFields())
+                    if (p.errorCode == 307 || (p.success && p.data?.orderNo != null)) {
+                        currentOrderNo = p.data?.orderNo
+                        updateOrderNo(snCode, currentOrderNo ?: "")
+                    } else checkKick(p.displayMessage)
+                } catch (e: Exception) { checkKickEx(e) }
+            }
+        }
+    }
+
+    private fun updateOrderNo(snCode: String, orderNo: String) {
+        val i = activeOrders.indexOfFirst { it.snCode == snCode }
+        if (i >= 0 && orderNo.isNotEmpty()) {
+            activeOrders[i] = activeOrders[i].copy(orderNo = orderNo)
+            ActiveOrderRepository.replace(activeOrders[i])
+        }
+    }
+
+    private fun enterShowerState(orderNo: String?, snCode: String, device: DeviceInfo, autoDiscon: Int = 0) {
+        currentOrderNo = orderNo; isShowering = true
+        showerPreDeduct = device.withholdMoney; showerConsumed = 0.0
+        showerRemaining = MoneyFormat.format(device.withholdMoney)
+        activeDeviceSnCodes.add(snCode)
+        // 开阀时间戳可能刚刚才写入（开阀成功时），这里读一次再刷新桌面，计时才对得上
+        refreshWidgets()
+
+        // 自动关停倒计时。界面上的秒数无条件跟随传入值；
+        // 持久化的截止时间只在没有时才写——恢复订单时传入的本身就是「剩余秒数」，
+        // 若用无条件覆盖的写法会把它当成新的完整时长，倒计时会越恢复越长
+        if (autoDiscon > 0) {
+            autoDisConSec = autoDiscon
+            if (PrefsHelper.getAutoDisconRemain(snCode) <= 0) {
+                PrefsHelper.setAutoDisconRemain(snCode, autoDiscon)
+            }
+        }
+
+        val st = PrefsHelper.getStartedAt(snCode)
+        showerElapsedSec = if (st > 0) ((System.currentTimeMillis() - st) / 1000).toInt() else {
+            PrefsHelper.setStartedAt(snCode, System.currentTimeMillis()); 0
+        }
+
+        lastDeviceName = device.displayName; lastDeviceMac = device.macAddress; lastDeviceSnCode = snCode; lastDeviceEmoji = device.typeEmoji
+        lastDeviceProjectId = currentProjectId
+        PrefsHelper.lastDeviceName = device.displayName; PrefsHelper.lastDeviceMac = device.macAddress
+        PrefsHelper.lastDeviceSnCode = snCode; PrefsHelper.lastDeviceEmoji = device.typeEmoji
+        PrefsHelper.lastDeviceProjectId = currentProjectId
+        PrefsHelper.lastDeviceRawName = device.deviceName   // 寝室筛选用，见 PrefsHelper
+
+        // 交给前台服务持续监控：超时自动关停、被外部关闭，都要能立刻发现。
+        // 这两件事以前挂在下头的 timerJob 上，退出洗澡页就被 cancel 了。
+        appContext?.let { ShowerWatchService.start(it, snCode) }
+
+        // ⚠️ 这个计时器现在只做一件事：每秒刷新界面上显示的「已用时长」。
+        //
+        // 它以前还兼职做「倒计时递减」和「每 15 秒轮询订单状态」，但那两件事挂在这里
+        // 有两个致命问题：`minimizeShower()` 会 cancel 它（退出洗澡页就没人管了），
+        // 从小组件开阀时更是压根不会启动。现在都搬进 ShowerWatchService 了。
+        //
+        // 倒计时也从「每秒减一」改成了直接读 Prefs——那里存的是截止**时间戳**，
+        // 按当前时间算出来，不会因为协程被延迟而慢慢走偏。
+        timerJob?.cancel()
+        timerJob = sessionScope().launch {
+            while (isShowering) {
+                delay(1000)
+                val st = PrefsHelper.getStartedAt(snCode)
+                if (st > 0) {
+                    showerElapsedSec = ((System.currentTimeMillis() - st) / 1000).toInt()
+                    autoDisConSec = PrefsHelper.getAutoDisconRemain(snCode)
+                }
+            }
+        }
+    }
+
+    private fun handleMqttMessage(message: String) {
+        try {
+            val msg = gson.fromJson(message, MqttOrderMsg::class.java)
+
+            // ⚠️ 这里曾经是 `showerSnCode?.let { updateOrderNo(it, it) }`——
+            // 内层的 `it` **遮蔽**了外层 `it`，两个参数都变成了设备序列号，
+            // 于是持久化的 orderNo 被写成了 snCode。
+            //
+            // 后果不容易当场发现：关阀和结算拿这个假 orderNo 去查，服务端只会说"查不到"，
+            // 然后静默退化成按时间窗猜账单——而那个兜底本来就不可靠。
+            // 所以这里**必须用具名变量**，别再用嵌套 `let` 的隐式 `it`。
+            msg.orderNo?.let { orderNo ->
+                if (currentOrderNo == null) {
+                    currentOrderNo = orderNo
+                    showerSnCode?.let { sn -> updateOrderNo(sn, orderNo) }
+                }
+            }
+            msg.consumeMoney?.let {
+                showerConsumed = it
+                showerRemaining = MoneyFormat.format(if (showerPreDeduct - it < 0) 0.0 else showerPreDeduct - it)
+            }
+        } catch (e: Exception) {
+            // 消息体格式变了 / 被截断时以前是静默丢弃，会导致「消费金额不更新」查不出原因
+            AppLogger.w("MQTT 消息解析失败：${message.take(200)}（${e.message}）")
+        }
+    }
+
+    /**
+     * 回到前台时对齐一次洗澡状态。
+     *
+     * [ShowerEvents] 是**没有 replay 的进程内事件**——正常情况下服务发、界面收，
+     * 但万一漏了（事件发出时收集器恰好没就绪、或者进程被重建），
+     * 用户就会看到洗澡界面挂在那里、计时还不走了（`startedAt` 已被清成 0）。
+     *
+     * 这里按本地活跃订单再核一次，兜住那条链路。**纯读 Prefs，不发网络请求**——
+     * 服务结束时会先清 `activeOrders`，所以本地状态就是准的。
+     */
+    fun reconcileShowerOnResume() {
+        if (!isShowering) return
+        activeWasherSession?.let { session ->
+            showerElapsedSec = ((System.currentTimeMillis() - session.startedAtMs) / 1000)
+                .toInt().coerceAtLeast(0)
+            sessionScope().launch {
+                WasherController.status(session.device)?.let(::applyWasherStatus)
+            }
+            return
+        }
+        val sn = showerSnCode ?: return
+        if (ShowerController.isRunning(sn)) {
+            // 还在用，只是把界面上的数字拉正（切后台期间计时器没跑）
+            val st = PrefsHelper.getStartedAt(sn)
+            if (st > 0) showerElapsedSec = ((System.currentTimeMillis() - st) / 1000).toInt()
+            autoDisConSec = PrefsHelper.getAutoDisconRemain(sn)
+            return
+        }
+        // 已经结束了，而界面还停在洗澡页——补一次收尾
+        AppLogger.i("回前台对齐：$sn 已结束，退出使用页")
+        finishShower(sn, null)
+    }
+
+    /**
+     * 用水结束（由 [ShowerWatchService] 检测到：设备超时自己关的，或在别处被关的）。
+     *
+     * 服务那边已经把活跃订单清掉、小组件刷新过、通知也发完了，
+     * 这里只剩界面收尾——所以金额是直接带过来的，**不再自己结算一遍**。
+     */
+    private fun onShowerFinishedFromService(e: ShowerEvents.Finished) {
+        // 先把 Prefs 里的活跃订单读回内存：小组件那边开了阀又关了，
+        // 这个 ViewModel 的内存副本一直是旧的
+        syncActiveOrdersFromPrefs()
+
+        if (!isShowering || showerSnCode != e.snCode) return
+
+        timerJob?.cancel(); orderPollJob?.cancel()
+
+        if (!e.autoClosed) {
+            // 用户自己结束的（通知栏「结束用水」按钮 / 小组件停止）：
+            // 直接退出使用页就行，不用再弹一个确认框
+            finishShower(e.snCode, e.money?.takeIf { it > 0 })
+            return
+        }
+
+        // 设备自己超时关的：弹确认框把结果告诉用户
+        autoCloseDeviceName = e.deviceName
+        autoCloseElapsed = e.elapsedSec
+        autoCloseConsumed = e.money   // 可空：null 时弹窗会说「未能获取」而不是 ¥0.00
+        autoCloseLoading = false
+        showAutoCloseDialog = true
+    }
+
+    /** 用户点确认：退出洗澡界面并清理 */
+    fun confirmAutoClose() {
+        showAutoCloseDialog = false
+        val snCode = showerSnCode ?: ""
+        finishShower(snCode, null)
+    }
+
+    /**
+     * 把使用页拉回来。点「正在使用」通知进来时调用。
+     *
+     * 界面可能是三种状态之一：
+     * - **已经停在使用页** → 什么都不用做
+     * - **之前点了「最小化」** → `isShowering` 是 false，但设备还在跑
+     * - **App 被杀过** → 同上，而且内存里的活跃订单也没了
+     *
+     * 后两种都要先从 Prefs 把活跃订单读回来，再走「恢复订单」那条路——
+     * `openValve` 查到已有订单且是自己的时候返回 `Resumed`，**不会重新开阀**，
+     * 正好是首页那张「使用中的设备」卡片上「恢复」按钮的行为。
+     */
+    fun restoreShowerScreen(phone: String) {
+        if (isShowering) return
+        if (activeWasherSession != null) {
+            restoreWasherScreen()
+            return
+        }
+        syncActiveOrdersFromPrefs()
+        val order = activeOrders.firstOrNull() ?: return
+        lastDeviceSnCode = order.snCode
+        lastDeviceMac = order.deviceMac
+        startLastDevice(phone)
+    }
+
+    fun restoreWasherScreen() {
+        val session = activeWasherSession ?: return
+        if (isShowering) return
+        selectedDevice = session.device
+        isShowering = true
+        timerJob?.cancel()
+        timerJob = sessionScope().launch {
+            while (activeWasherSession != null && isShowering) {
+                delay(1000)
+                showerElapsedSec = ((System.currentTimeMillis() - session.startedAtMs) / 1000)
+                    .toInt().coerceAtLeast(0)
+                // 与 enterWasherState 的计时器一致：两次轮询之间本地倒数，避免数字冻住
+                washerRemainingSec = BoundWasherState.countdown(
+                    washerRemainingBaseSec,
+                    washerRemainingUpdatedAtMs,
+                    System.currentTimeMillis()
+                )
+            }
+        }
+    }
+
+    /**
+     * 最小化使用界面：退出界面但**不结束用水**。
+     * 订单保留在 activeOrders，计时器（startedAt）继续累计，可随时通过"恢复"回到界面。
+     */
+    fun minimizeShower() {
+        if (!isShowering) return
+        timerJob?.cancel()
+        orderPollJob?.cancel()
+        isShowering = false
+        isStopping = false
+        showerSnCode = null
+        currentOrderNo = null
+        // 注意：保留 activeOrders 与 PrefsHelper.getStartedAt(snCode)，用水与计时都继续
+        try { mqttManager?.disconnect() } catch (_: Exception) {}
+        toastMessage = "已返回主页，设备仍在运行"
+    }
+
+    // ════════════════════════════════════════════
+    fun stopShower(skipNetwork: Boolean = false) {
+        if (!isShowering || isStopping) return
+
+        // 蓝牙表：关阀靠**当前这条 BLE 连接**，和云端下发完全不是一条路
+        if (bleSession != null) {
+            stopBleShower(skipNetwork)
+            return
+        }
+
+        // 会话丢了但设备标着蓝牙 → 进程曾被杀（崩溃/系统回收），
+        // 恢复出使用页但内存里的 session 没了。落到下面的云端关阀对
+        // 无 4G 的蓝牙表**必然失败**，必须重连设备再关。
+        val snForBle = showerSnCode ?: activeOrders.firstOrNull()?.snCode ?: ""
+        if (PrefsHelper.isBleDevice(snForBle)) {
+            reconnectAndStopBle(snForBle)
+            return
+        }
+
+        val snCode = showerSnCode ?: ""
+        val oNo = currentOrderNo ?: activeOrders.find { it.snCode == snCode }?.orderNo ?: ""
+
+        // 挤号等场景：loginCode 已失效，跳过网络请求，直接本地清理，避免再次触发挤号
+        if (skipNetwork) {
+            finishShower(snCode, null)
+            return
+        }
+
+        isStopping = true
+        // 立刻把通知切成「正在结束」。关阀确认要轮询最多 5 秒，
+        // 不切的话用户点完还得盯着「正在使用 · 秒数还在走」干等。
+        appContext?.let { Notifier.showStopping(it, lastDeviceName.ifEmpty { "热水器" }) }
+        sessionScope().launch {
+            try {
+                // ⚠️ orderNo 必须在**关阀之前**敲定：关阀成功后订单就没了，
+                // `queryUsing` 再也问不出来。而开阀后 orderNo 是异步轮询补上的，
+                // 「开完水马上停」时本地可能还是空串——那就白丢了结算用的那个直答接口。
+                val settledNo = ShowerController.resolveOrderNo(snCode).ifEmpty { oNo }
+                // 关阀 + 确认 + 清本地状态都在 ShowerController 里，小组件的「停止使用」走同一份逻辑
+                val outcome = ShowerController.closeValve(snCode, settledNo)
+                checkKick(outcome.kickHint)
+
+                if (outcome is CloseOutcome.Failed) {
+                    toastMessage = outcome.message
+                    isStopping = false
+                    return@launch
+                }
+
+                // ⚠️ 没确认到设备停了（多半是断网，关阀请求压根没发出去）——
+                // **不能退出使用页**。这一页上的「停止」是用户唯一的停止入口，
+                // 退出去就等于把他扔在一个「以为停了、其实还在扣钱」的状态里，
+                // 而且他想再停一次都找不到按钮。留在这里，让他能重试。
+                if (outcome is CloseOutcome.Unconfirmed) {
+                    toastMessage = "没能确认设备已关闭，请检查网络后重试"
+                    isStopping = false
+                    AppLogger.w("停止用水未确认：${outcome.message}")
+                    return@launch
+                }
+
+                val startTime = (outcome as CloseOutcome.Closed).startTimeMs
+                finishShower(snCode, null)
+                // 界面已退出（不阻塞），后台异步等账单结算后弹金额
+                sessionScope().launch {
+                    // 和小组件/通知栏那两个入口一样：先挂「结算中」，拿到金额原地更新
+                    val elapsed0 = if (startTime > 0)
+                        ((System.currentTimeMillis() - startTime) / 1000).toInt() else 0
+                    appContext?.let {
+                        Notifier.showSettling(
+                            it, Notifier.ID_FINISHED,
+                            "使用结束 · ${lastDeviceName.ifEmpty { "热水器" }}", elapsed0
+                        )
+                    }
+                    val amount = SettlementEngine.settleAmount(
+                        settledNo,
+                        startTime,
+                        snCode,
+                        lastDeviceName
+                    )
+                    toastMessage = when {
+                        // null = 两条路都没拿到金额，是「还不知道」而不是「没花钱」
+                        amount == null -> "已停止，消费金额稍后可在账单中查看"
+                        amount > 0 -> "已停止，本次消费 ${MoneyFormat.withSymbol(amount)}"
+                        else -> "热水器已关闭，本次无消费"
+                    }
+                    // 结算拿到了新的「上次消费」，让桌面小组件跟上
+                    refreshWidgets()
+
+                    // 发系统通知，然后把后台监控停掉。
+                    // 不停的话它下一轮会查到订单已经没了，再发一条重复的结束通知。
+                    appContext?.let { ctx ->
+                        val elapsed = if (startTime > 0)
+                            ((System.currentTimeMillis() - startTime) / 1000).toInt() else 0
+                        Notifier.showFinished(
+                            ctx,
+                            lastDeviceName.ifEmpty { "热水器" },
+                            elapsed,
+                            amount      // 可空：null 会显示成「结算中」而不是「无消费」
+                        )
+                        ShowerWatchService.stop(ctx)
+                    }
+                }
+            } catch (e: Exception) {
+                checkKickEx(e)
+                toastMessage = "停止洗澡失败，请检查网络后重试"
+                isStopping = false
+            }
+        }
+    }
+
+    /**
+     * 蓝牙表：关阀 + 结算。
+     *
+     * 流程：关阀(`0x22`) → 采集(`0x85`) → 上传 → 解密 `clData` → 写回(`0x86`)。
+     *
+     * ⚠️ 两个和 4G 表不一样的地方：
+     *
+     * 1. **关阀是本地 BLE 操作，不依赖登录态**——所以即使被挤号、
+     *    `loginCode` 已失效，也要尽力把阀关掉（只是结算会失败）。
+     * 2. **关阀失败时绝不能退出使用页**。这一页的按钮是用户唯一的停止入口，
+     *    退出去等于把他扔在「以为停了、其实水还在流」的状态里。
+     *
+     * @param skipNetwork 保留以对齐 [stopShower] 的调用方；蓝牙表关阀不走网络，
+     *   所以这里**不因它跳过流程**（结算失败会自然落到「部分结算」分支）
+     */
+    /**
+     * BLE 会话丢失后的补救关阀：重连设备 → 拿状态帧重建会话 → 走正常蓝牙关阀。
+     *
+     * 适用场景：开阀成功后进程被杀（崩溃 / 系统回收），App 重启恢复出使用页，
+     * 但内存里的 [bleSession] 已经没了。此时云端关阀必然失败（蓝牙表没有 4G，
+     * 服务端管不到阀），唯一的路是重新连上设备把阀关掉。
+     *
+     * 状态帧里的 `protocolType` / `randomNumber` 重连后设备会重新给，
+     * 所以会话可以完整重建；`consumeDate` 拿不回来了（只在失败上报时用，留空）。
+     */
+    private fun reconnectAndStopBle(snCode: String) {
+        val ctx = appContext
+        if (ctx == null) {
+            toastMessage = "应用上下文丢失，请重试"
+            isStopping = false
+            endStopAttempt()
+            return
+        }
+        isStopping = true
+        appContext?.let { Notifier.showStopping(it, lastDeviceName.ifEmpty { "热水器" }) }
+        sessionScope().launch {
+            // MAC 优先取活跃订单里存的（就是开阀时用的那个），丢了再回落
+            val mac = (ShowerController.activeOrderFor(snCode)?.deviceMac ?: PrefsHelper.lastDeviceMac)
+                .replace(":", "")
+                .replace("-", "")
+                .uppercase()
+            if (mac.length != 12) {
+                AppLogger.w("蓝牙补救关阀中止：MAC 无效（$mac）")
+                toastMessage = "设备地址丢失，无法关闭，请重新进入设备页面后重试"
+                isStopping = false
+                endStopAttempt()
+                return@launch
+            }
+
+            val ble = bleController ?: BleController(ctx).also { bleController = it }
+            bleProgress = "正在重新连接设备…"
+            // ⚠️ 这里存的是**台账 MAC**，而蓝牙连接要的是手机扫描到的**空口广播地址**，
+            // 两个对部分设备不是一个字符串（见 MacFormat）。只有台账 MAC 时按规范反推；
+            // 推不出来说明本来就是个广播地址，原样返回。
+            val connectAddress = MacFormat.connectAddressFor(mac)
+            val st: DeviceQueryState? = try {
+                when (val cr = ble.connect(connectAddress)) {
+                    is BleConnectResult.Ready -> ble.query()
+                    is BleConnectResult.NoService -> null
+                    is BleConnectResult.Failed -> {
+                        AppLogger.w("蓝牙补救关阀连接失败：${cr.reason}")
+                        null
+                    }
+                }
+            } catch (t: Throwable) {
+                AppLogger.e("蓝牙补救关阀重连异常", t)
+                null
+            }
+            bleProgress = null
+            if (st == null) {
+                toastMessage = "蓝牙连接失败，请靠近设备后重试"
+                isStopping = false
+                endStopAttempt()
+                return@launch
+            }
+
+            AppLogger.i("蓝牙会话已重建：protocol=${st.protocolType} random=${st.randomNumber}")
+            bleSession = BleShowerController.Session(
+                snCode = snCode,
+                // ⚠️ 必须是**连接地址**（上面那个 connectAddress），不能是台账 MAC：
+                // closeAndSettle 会拿 session.mac 再连一次设备（设备只在新连接里
+                // 给出可结算的记录），存错了就永远连不上、关阀失败。
+                mac = connectAddress,
+                protocolType = st.protocolType,
+                randomNumber = st.randomNumber,
+                consumeDate = "",   // 进程死亡后拿不到了；只有失败上报用，先留空
+                orderNo = ShowerController.activeOrderFor(snCode)?.orderNo ?: ""
+            )
+            // 会话已就位，走正常蓝牙关阀 + 结算
+            stopBleShower()
+        }
+    }
+
+    private fun stopBleShower(@Suppress("UNUSED_PARAMETER") skipNetwork: Boolean = false) {
+        // 小组件转交过来的关阀：busy 已由服务标记为「托管给 App」，所有出口都要 endStopAttempt
+        val session = bleSession ?: return
+        val ble = bleController
+        if (ble == null) {
+            // 连接已经没了，阀关不了——如实告诉用户，别假装成功
+            toastMessage = "蓝牙连接已断开，请重新连接该设备后再关闭"
+            isStopping = false
+            endStopAttempt()
+            return
+        }
+
+        // 蓝牙通道互斥：小组件服务可能正在操作同一台设备，两边同时 connectGatt 会互抢连接
+        if (!BleArbiter.begin(session.snCode, "app")) {
+            toastMessage = "该设备正在处理其他蓝牙操作，请稍候再试"
+            isStopping = false
+            endStopAttempt()
+            return
+        }
+
+        isStopping = true
+        appContext?.let { Notifier.showStopping(it, lastDeviceName.ifEmpty { "热水器" }) }
+
+        sessionScope().launch {
+            bleProgress = "正在关闭设备…"
+            val outcome = try {
+                BleShowerController.closeAndSettle(
+                    ble = ble,
+                    session = session,
+                    loginCode = PrefsHelper.loginCode,
+                    telephone = phone
+                )
+            } catch (t: Throwable) {
+                AppLogger.e("蓝牙停止异常", t)
+                null
+            } finally {
+                // 临界区（连设备 + 关阀 + 结算）结束即释放
+                BleArbiter.end(session.snCode)
+            }
+            bleProgress = null
+
+            when (outcome) {
+                is BleShowerController.SettleOutcome.Completed -> {
+                    // ⚠️ 金额单位**未实测确认**。按与 4G 表一致的「厘」处理（÷1000），
+                    // 并在日志里留原始值——第一次真机结算后要用账单列表核对一次。
+                    val yuan = MoneyFormat.milliToYuan(outcome.rawUpMoney)
+                    AppLogger.i("蓝牙结算金额：原始=${outcome.rawUpMoney} 按厘换算=¥$yuan")
+                    toastMessage = if (yuan != null && yuan > 0) {
+                        "已停止，本次消费 ${MoneyFormat.withSymbol(yuan)}"
+                    } else {
+                        "设备已关闭"
+                    }
+                    // ⚠️ 立即记一笔「上次消费」给桌面小组件。蓝牙路径原先漏了这一步，
+                    // 卡片只能等下次拉账单才对上，表现为「上次消费更新不及时」。
+                    if (yuan != null && yuan > 0) PrefsHelper.recordConsume(session.snCode, yuan)
+                    finishShower(session.snCode, yuan)
+                    refreshWidgets()
+                    releaseBle()
+                }
+
+                is BleShowerController.SettleOutcome.PartialSettlement -> {
+                    // 水**已经关了**，只是账没结完。要退出使用页（否则用户被卡住），
+                    // 但明确告诉他金额去哪儿看
+                    toastMessage = "设备已关闭；${outcome.message}，金额请稍后在账单中查看"
+                    finishShower(session.snCode, null)
+                    releaseBle()
+                }
+
+                is BleShowerController.SettleOutcome.CloseFailed -> {
+                    // ⚠️ 水可能还在流 —— 留在使用页，让他能重试
+                    toastMessage = outcome.message
+                    AppLogger.w("蓝牙关阀失败，保留使用页以便重试")
+                    isStopping = false
+                    endStopAttempt()   // 卡片从「正在关闭…」回到「使用中」，水确实还在流
+                }
+
+                null -> {
+                    toastMessage = "停止失败，请重试"
+                    isStopping = false
+                    endStopAttempt()
+                }
+            }
+        }
+    }
+
+    /** 完成停止流程：退出洗澡界面，清理状态，显示结算结果 */
+    /**
+     * 一次停止尝试结束（**成败都算**）：收掉小组件托管过来的「正在关闭…」并重绘桌面。
+     *
+     * 小组件的关阀有两种走法，busy 的归属跟着操作走：
+     *
+     * | 走法 | busy 谁清 |
+     * |---|---|
+     * | 服务自己关（App 进程不在） | `WidgetBleService` 的 finally |
+     * | 转交 App 关（App 握着连接） | **本方法**——转交时 busy 被保留，一直显示「正在关闭…」直到真正关完 |
+     *
+     * 少了这里的收尾，转交路径的卡片会在关阀中途弹回「使用中」继续计时，
+     * 过一两秒才变空闲——用户看到的就是「闪一下正在关闭、又接着计时」。
+     */
+    private fun endStopAttempt() {
+        WidgetBridge.clearBusy()
+        refreshWidgets()
+    }
+
+    private fun finishShower(snCode: String, consumed: Double?) {
+        isShowering = false
+        isStopping = false
+
+        // 从活跃列表移除
+        activeOrders.removeAll { it.snCode == snCode }
+        ActiveOrderRepository.remove(snCode)
+        activeDeviceSnCodes.remove(snCode)
+
+        if (consumed != null && consumed > 0) {
+            toastMessage = "已停止，本次消费 ${MoneyFormat.withSymbol(consumed)}"
+        } else {
+            // 0.0 或 null（结算没拿到金额）都只提示关闭，不弹「消费 ¥0.00」
+            toastMessage = "热水器已关闭"
+        }
+
+        currentOrderNo = null; showerConsumed = 0.0; showerPreDeduct = 0.0
+        showerRemaining = "0.00"; showerElapsedSec = 0
+        autoDisConSec = 0
+        PrefsHelper.setStartedAt(snCode, 0L) // 重置该设备计时器
+        PrefsHelper.clearAutoDiscon(snCode)  // 清除自动关停倒计时
+        showerSnCode = null; timerJob?.cancel(); orderPollJob?.cancel()
+        try { mqttManager?.disconnect() } catch (_: Exception) {}
+        // ⚠️ 小组件的「正在关闭…」由本进程收尾：转交过来的关阀（见 WidgetBleService），
+        // busy 一直保留到这里，清掉后卡片才落到「空闲」。
+        WidgetBridge.clearBusy()
+        refreshWidgets()
+    }
+
+    fun logout(preserveActiveRecovery: Boolean = false) {
+        // 掐断所有网络任务（含挤号心跳），避免退出后还有响应回来改状态
+        stopTimer()
+        sessionJob.cancel()
+        sessionJob = SupervisorJob(viewModelScope.coroutineContext[Job])
+
+        // 释放蓝牙连接。能走到这里说明**没有进行中的用水**——
+        // 有活跃订单时 `canLogoutVoluntarily` 会先拦住，所以断连是安全的。
+        // ⚠️ 蓝牙表断开后就再也关不了阀，这句话是这里唯一的安全保证，别绕过。
+        releaseBle()
+        projectBleConnections.values.forEach { it.controller?.disconnect() }
+        projectBleConnections.clear()
+
+        // 断开 MQTT 连接
+        try { mqttManager?.disconnect() } catch (_: Exception) {}
+
+        // 停止蓝牙扫描
+        try { scanner?.stopScan() } catch (_: Exception) {}
+        isScanning = false
+
+        // 重置所有状态
+        isShowering = false
+        showerSnCode = null
+        currentOrderNo = null
+        showerConsumed = 0.0
+        showerPreDeduct = 0.0
+        showerRemaining = "0.00"
+        showerElapsedSec = 0
+        showerError = null
+        toastMessage = null
+        kickedOut = false
+        selectedDevice = null
+        showDeviceDetail = false
+        activeWasherSession = null
+        washerStatus = null
+        washerStageText = ""
+        washerRemainingSec = 0
+        washerRemainingBaseSec = 0
+        washerRemainingUpdatedAtMs = 0L
+        washerModePickerDevice = null
+        washerModes.clear()
+        PrefsHelper.washerSessionJson = ""
+        nearbyDevices.clear()
+        activeOrders.clear()
+        activeDeviceSnCodes.clear()
+        billList = emptyList()
+        billHistory = emptyList()
+        billsProjectId = ""
+        // 一起复位：下一轮登录要重新等账单到位，不能沿用上一次的「已加载」
+        billsLoaded = false
+        useCodeData = null
+        walletInfo = null
+        // 账号信息是跟人走的，换账号必须清掉，否则会显示上一任的姓名/学号/余额
+        accountInfo = null
+        campusBalance = null
+        walletBalance = null
+        currentProjectId = ""
+        currentProjectName = "当前项目"
+        availableProjects = emptyList()
+        projectsLoading = false
+        projectSwitching = false
+        billLoadSeq++
+        phone = ""
+        useCodeLoaded = false
+        // 未支付账单和代扣锁是**跟账号走的**：不清的话，换账号后开阀失败弹窗会列出
+        // 上一任的账单和金额，还能用新账号的凭证去扣它；锁更麻烦——
+        // 万一扣款协程在启动前就被取消（logout/挤号都会 cancel sessionJob），
+        // 清锁那行永远跑不到，之后所有代扣都会静默失效，只能杀进程
+        unpaidBills = emptyList()
+        deductingConsumeDate = null
+        unpaidSeq++
+        // 内存态的「上次设备」也要跟着清。
+        //
+        // Prefs 那份由 `PrefsHelper.clear()` 负责——它的动态 filter 走
+        // `shouldPreserveForRecovery`，而那个函数覆盖了 `lastDevice*` 前缀，
+        // 所以正常登出时落盘的七个字段都会被 remove。**内存副本是另一份**，
+        // 不清的话，重新登录之后、`initManagers` 重新读 Prefs 覆盖回来之前
+        // 那段窗口里，界面读到的还是上一任的设备。
+        //
+        // ⚠️ 挤号（`preserveActiveRecovery = true`）时**绝不能清**：那时正是要靠
+        // 这些字段保住正在用水的设备上下文，清了用户就找不到停止入口了。
+        if (!preserveActiveRecovery) {
+            lastDeviceName = ""
+            lastDeviceMac = ""
+            lastDeviceSnCode = ""
+            lastDeviceEmoji = "🚿"
+            lastDeviceProjectId = ""
+            boundRoom = ""
+        }
+        PrefsHelper.clear(preserveActiveRecovery)
+        if (preserveActiveRecovery) appContext?.let(ShowerWatchService::stop)
+    }
+
+    fun isLastDeviceInCurrentProject(): Boolean =
+        lastDeviceMac.isNotEmpty() && lastDeviceProjectId == currentProjectId
+
+    fun isDeviceActive(snCode: String) =
+        snCode in activeDeviceSnCodes || activeWasherSession?.device?.snCode == snCode
+
+    // ── 寝室绑定 / 设备筛选 ──
+
+    /**
+     * 绑定的寝室键。
+     *
+     * ⚠️ 必须是 Compose 状态，**不能直接读 `PrefsHelper.boundRoom`**。
+     * SharedPreferences 是普通属性，改它不会触发重组——首页设备列表的过滤结果
+     * 是用 `remember(..., boundRoom)` 缓存的，读 pref 的话取消绑定后列表要等
+     * 下一次扫描（或别的什么把界面顶一下）才会更新，表现就是「点了取消没反应」。
+     *
+     * 改绑定一律走 [applyBoundRoom]，别绕过它直接写 PrefsHelper。
+     */
+    var boundRoom by mutableStateOf(PrefsHelper.boundRoom)
+        private set
+
+    /** 绑定/取消绑定寝室。写 Prefs + 更新状态 + 收尾（清寝室外的上次设备、刷新桌面） */
+    fun applyBoundRoom(value: String) {
+        val v = value.trim()
+        PrefsHelper.boundRoom = v
+        boundRoom = v
+        onBoundRoomChanged()
+    }
+
+    /** 当前是否有绑定寝室 */
+    val hasBoundRoom: Boolean get() = boundRoom.isNotBlank()
+
+    /**
+     * 这台设备在不在绑定的寝室内。
+     *
+     * `boundRoom` 里存的是**完整的设备名**（选择附近时存的是被选中的那台的原名），
+     * 所以两边都要先过一遍 [DeviceInfo.roomKey] 取关键词，再**等值**比较——
+     * 规则和原因都在那里写着，别在这儿另写一套。
+     */
+    fun matchesBoundRoom(deviceName: String): Boolean =
+        DeviceInfo.inSameRoom(PrefsHelper.boundRoom, deviceName)
+
+    /**
+     * 绑定/换绑寝室之后收尾：**清掉寝室外的「上次使用设备」**，并让桌面跟上来。
+     *
+     * 为什么是「清掉」而不是「只是不显示」：`lastDeviceSnCode` 是小组件主按钮的
+     * **开阀依据**。留着它就等于留着一条「点一下就开别寝室的水」的路——
+     * 虽然小组件那边也加了一道闸门，但两处都拦不如根本不留下这台设备。
+     *
+     * ⚠️ **正在用水的设备不清**：那条记录对应着一个活跃订单，清掉会让水还在流、
+     * 卡片却没了停止入口。用水中的卡片本来就不参与筛选（见 WidgetRenderer.readState），
+     * 所以留着它是安全的。等这单结束，用户再重新选设备或改绑定。
+     */
+    fun onBoundRoomChanged() {
+        val name = PrefsHelper.lastDeviceName
+        val sn = PrefsHelper.lastDeviceSnCode
+        if (name.isEmpty() || sn.isEmpty()) { refreshWidgets(); return }
+        // ⚠️ 判断用**原始设备名**（roomFilterName），不是 name。
+        // name 是格式化过的显示名，楼层被 formatDeviceName 去掉了，拿它算出来的
+        // 寝室键和绑定值对不上——会把一个**本来就在寝室里**的设备误清掉。
+        if (DeviceInfo.inSameRoom(PrefsHelper.boundRoom, ShowerController.roomFilterName())) {
+            refreshWidgets()
+            return
+        }
+        if (ShowerController.isRunning(sn)) {
+            AppLogger.w("绑定寝室后没清上次设备：$name 正在用水，保留停止入口")
+            refreshWidgets()
+            return
+        }
+        PrefsHelper.lastDeviceSnCode = ""
+        PrefsHelper.lastDeviceName = ""
+        PrefsHelper.lastDeviceRawName = ""
+        PrefsHelper.lastDeviceMac = ""
+        PrefsHelper.lastDeviceEmoji = "🚿"
+        PrefsHelper.lastDeviceProjectId = ""
+        lastDeviceSnCode = ""
+        lastDeviceName = ""
+        lastDeviceMac = ""
+        lastDeviceEmoji = "🚿"
+        lastDeviceProjectId = ""
+        AppLogger.i("绑定寝室后清掉了寝室外的上次设备：$name")
+        refreshWidgets()
+    }
+
+    // ── 挤号 ──
+
+    /** 心跳间隔。要"马上发现被挤号"就得主动轮询，这是拿一点电和流量换来的 */
+    private val kickWatchIntervalMs = 25_000L
+
+    /**
+     * 开始挤号心跳检测：登录后调用，按生命周期在前后台启停。
+     *
+     * 原来只有发请求时才顺带检查挤号（被动），用户挂在这个页面不动就永远发现不了。
+     * 这里定时打一个最轻的接口兜底，被挤号最多 25 秒内弹提示。
+     */
+    fun startKickWatch() {
+        if (kickWatchJob?.isActive == true) return
+        kickWatchJob = sessionScope().launch {
+            while (isActive) {
+                delay(kickWatchIntervalMs)
+                if (kickedOut) break
+                try {
+                    val resp = NetworkModule.apiService.getWalletSafe()
+                    if (resp.success) {
+                        // 顺手把钱包余额刷新了。这条心跳本来就在跑，
+                        // 不额外增加请求量，却让余额每 25 秒自己跟上——
+                        // 洗完澡余额会变，不用等用户手动下拉刷新。
+                        resp.data?.money?.toDoubleOrNull()?.let {
+                            walletBalance = it
+                            PrefsHelper.walletBalance = it.toString()
+                        }
+                    } else checkKick(resp.displayMessage)
+                } catch (e: Exception) {
+                    // 网络异常不算挤号，checkKickEx 只认 401/403
+                    checkKickEx(e)
+                }
+            }
+        }
+    }
+
+    fun stopKickWatch() {
+        kickWatchJob?.cancel()
+        kickWatchJob = null
+    }
+
+    /**
+     * 被挤号：标记状态并清掉本地凭证。
+     *
+     * 用 `if (kickedOut) return` 兜住重复触发——多个请求可能几乎同时返回"登录失效"，
+     * 否则会反复 clear() + 反复通知界面。
+     */
+    private fun kickOut() {
+        if (kickedOut || projectSwitching || !sessionJob.isActive) return
+        kickedOut = true
+        stopTimer()
+        PrefsHelper.clear(preserveActiveRecovery = true)
+        appContext?.let(ShowerWatchService::stop)
+        // 和 logout() 同理：账号已经失效，上一任的未支付账单和代扣锁都不能留
+        unpaidBills = emptyList()
+        deductingConsumeDate = null
+        unpaidSeq++
+        // 掐断旧会话的所有在途请求，避免它们的失败响应回来干扰用户接下来的重新登录。
+        // 放在最后：调用者本身就跑在 sessionJob 上，取消会连自己一起取消，
+        // 而取消是协作式的——只要后面不再有挂起点，这几行仍会执行完。
+        sessionJob.cancel()
+        sessionJob = SupervisorJob(viewModelScope.coroutineContext[Job])
+    }
+
+    private fun checkKick(msg: String?) {
+        if (msg.isNullOrEmpty()) return
+        if (msg.contains("登录") || msg.contains("token") || msg.contains("失效") || msg.contains("过期") || msg.contains("认证") || msg.contains("未登录") || msg.contains("请重新")) {
+            kickOut()
+        }
+    }
+
+    private fun checkKickEx(e: Exception) {
+        val m = e.message ?: return
+        if (m.contains("401") || m.contains("403") || m.contains("Unauthorized") || m.contains("Forbidden")) {
+            kickOut()
+        }
+    }
+
+    /** 取消计时与轮询（挤号 / 退出登录共用） */
+    private fun stopTimer() {
+        timerJob?.cancel(); timerJob = null
+        orderPollJob?.cancel(); orderPollJob = null
+        washerPollJob?.cancel(); washerPollJob = null
+        stopKickWatch()
+    }
+
+    /**
+     * 开始一次新会话：登录成功后调用。
+     *
+     * 必须做三件事，缺一个都会导致"重新登录进去还是被弹出"：
+     * 1. 换一个全新的 sessionJob，让旧会话的残留请求彻底失效
+     * 2. 清掉 kickedOut 标志，否则主界面一挂载就又弹挤号框
+     * 3. 断开上一轮的 MQTT（它还连着旧会话的 topic），由新会话按需重连
+     */
+    fun beginSession() {
+        sessionJob.cancel()
+        sessionJob = SupervisorJob(viewModelScope.coroutineContext[Job])
+        stopTimer()
+        try { mqttManager?.disconnect() } catch (_: Exception) {}
+        kickedOut = false
+        // 换账号了，手机号跟着换（新会话的认证参数已经写进 Prefs，这里同步到界面状态）
+        phone = PrefsHelper.telephone
+        currentProjectId = PrefsHelper.projectId
+        currentProjectName = PrefsHelper.schoolName.ifBlank { "当前项目" }
+        availableProjects = emptyList()
+        projectSwitching = false
+        projectsLoading = false
+    }
+
+    fun refreshWallet() {
+        val requestProject = NetworkModule.currentProjectId()
+        sessionScope().launch {
+            try { 
+                val resp = NetworkModule.apiService.getWalletSafe()
+                if (NetworkModule.currentProjectId() != requestProject) return@launch
+                if (resp.success) {
+                    walletInfo = resp.data
+                    // 钱包余额落盘：一卡通拿不到时它就是真实余额
+                    // （见 BalanceEstimator 的三档优先级）。
+                    // ⚠️ 用 `money` 字符串字段而不是 `accountRealMoney` 数字：
+                    //    `money` / `accountRealMoneyStr` 已经是**元**（如 "55.460"），
+                    //    而 `accountRealMoney` 是厘（55460），单位得自己除 1000——
+                    //    服务端万一换单位就会静默错 1000 倍，字符串字段没这个风险。
+                    resp.data?.money?.toDoubleOrNull()?.let {
+                        walletBalance = it
+                        PrefsHelper.walletBalance = it.toString()
+                    }
+                } else checkKick(resp.displayMessage)
+            } catch (e: Exception) {
+                checkKickEx(e)
+                val msg = e.message ?: ""
+                if (msg.contains("Unable to resolve host", ignoreCase = true) ||
+                    msg.contains("No address associated", ignoreCase = true) ||
+                    msg.contains("Network is unreachable", ignoreCase = true) ||
+                    msg.contains("Failed to connect", ignoreCase = true)) {
+                    toastMessage = "网络连接失败，请检查网络设置"
+                }
+            }
+        }
+    }
+
+    fun loadUseCode() {
+        val requestProject = NetworkModule.currentProjectId()
+        sessionScope().launch {
+            try {
+                val resp = NetworkModule.apiService.getUseCodeSafe()
+                if (NetworkModule.currentProjectId() != requestProject) return@launch
+                if (resp.success && resp.data != null) useCodeData = resp.data
+                // 无论成功与否都算「拉过了」——网络失败时停在「加载中」比显示
+                // 「尚未领取」更糟，用户会以为 App 卡住了，而重进页面就会重拉
+                useCodeLoaded = true
+            } catch (e: Exception) {
+                // 使用码拉不到时以前没有任何痕迹，用户报「码是空的」无法判断是没领还是接口挂了
+                AppLogger.w("读取使用码失败：${e.message}")
+            }
+        }
+    }
+
+    /**
+     * 「换一个」：换出候选使用码，**不改变当前生效的码**。
+     *
+     * 服务端每次扣一次额度（每天 20 次），返回剩余次数。换出来要再
+     * [claimUseCode] 才生效，3 分钟内不领取就作废。
+     *
+     * @param onResult 成功时回调 `(新码, 剩余次数)`；失败回调 null
+     */
+    fun generateUseCode(onResult: (Pair<String, Int>?) -> Unit) {
+        sessionScope().launch {
+            val r = try {
+                val resp = NetworkModule.apiService.generateUseCodeSafe(NetworkModule.authFields())
+                val code = resp.data?.useCode
+                if (resp.success && !code.isNullOrEmpty()) {
+                    code to (resp.data?.remainTimes ?: 0)
+                } else null
+            } catch (_: Exception) {
+                null
+            }
+            onResult(r)
+        }
+    }
+
+    /** 「确定领取」：把换出来的候选码设为当前生效的使用码。成功返回 true */
+    fun claimUseCode(useCode: String, onResult: (Boolean) -> Unit) {
+        sessionScope().launch {
+            val ok = try {
+                NetworkModule.apiService
+                    .setUseCodeSafe(useCode, NetworkModule.authFields())
+                    .success
+            } catch (_: Exception) {
+                false
+            }
+            if (ok) loadUseCode()
+            onResult(ok)
+        }
+    }
+
+    /**
+     * 拉账号信息（姓名 / 学号 / 校园卡绑定状态）。
+     *
+     * 登录响应里其实也带这些字段，但我们的 Gson 模型只解析了用到的几个，
+     * 而且**姓名在学校没同步时会是空**——单独走这个接口补齐，拿到就写回 Prefs。
+     */
+    fun loadAccountInfo() {
+        if (!PrefsHelper.isLoggedIn) return
+        val requestProject = NetworkModule.currentProjectId()
+        sessionScope().launch {
+            try {
+                NetworkModule.apiService.getAccountInfoSafe().data?.let {
+                    if (NetworkModule.currentProjectId() != requestProject) return@launch
+                    applyIdentity(it.name, it.idCardNumber, it)
+                }
+                if (NetworkModule.currentProjectId() != requestProject) return@launch
+                // 姓名靠学校同步学籍数据，没同步的账号 /account/info 返回的 name 就是 null
+                // （实测同学的两个号都是这样）。换个接口再要一次——绑定卡信息里也有姓名和学号，
+                // 两个接口数据来源不同，一个没有另一个可能有。
+                if (PrefsHelper.userName.isEmpty() || PrefsHelper.userStudentId.isEmpty()) {
+                    NetworkModule.apiService.getBindCardInfoSafe().data?.let {
+                        if (NetworkModule.currentProjectId() != requestProject) return@launch
+                        applyIdentity(it.name, it.idCardNumber, null)
+                    }
+                }
+            } catch (e: Exception) {
+                // 姓名/学号拉不到时界面只是不显示，但日志里必须留痕，
+                // 否则「学校没同步」和「接口挂了」完全分不出来
+                AppLogger.w("读取账号信息失败：${e.message}")
+            }
+        }
+    }
+
+    /**
+     * 把姓名 / 学号落到 Prefs **和** [accountInfo] 上。
+     *
+     * 现在有三个接口都能给这两个字段（`/account/info`、`/account/card/getBindCardInfo`、
+     * `/settlement/campus/userInfo`），谁先拿到算谁的。所以统一走这里收口，
+     * 免得每个调用点各写一遍「判空 → 写 Prefs」。
+     *
+     * ⚠️ 必须同时更新 [accountInfo]：界面读的是这个 State，只写 Prefs 不会触发重组，
+     * 数据回来了界面也不刷新。
+     *
+     * @param extra 该来源额外的字段（卡状态之类），为 null 时保留已有的
+     */
+    private fun applyIdentity(name: String?, studentId: String?, extra: AccountInfo?) {
+        val n = name?.takeIf { it.isNotBlank() }
+        val s = studentId?.takeIf { it.isNotBlank() }
+        if (n != null) PrefsHelper.userName = n
+        if (s != null) PrefsHelper.userStudentId = s
+        if (n == null && s == null && extra == null) return
+
+        val cur = accountInfo
+        val merged = AccountInfo(
+            name = n ?: cur?.name,
+            idCardNumber = s ?: cur?.idCardNumber,
+            telephone = extra?.telephone ?: cur?.telephone,
+            genderName = extra?.genderName ?: cur?.genderName,
+            cardStatus = extra?.cardStatus ?: cur?.cardStatus,
+            cardStatusName = extra?.cardStatusName ?: cur?.cardStatusName,
+            gradeName = extra?.gradeName ?: cur?.gradeName,
+            className = extra?.className ?: cur?.className
+        )
+        if (merged != cur) accountInfo = merged
+    }
+
+    /**
+     * **未支付账单**——就是俗称的「残留账单」。
+     *
+     * 12 点后结束用水、或者一卡通余额不足时，服务端结算没扣成，账单会留在待扣状态。
+     * 界面靠它决定哪些账单显示「请求代扣」按钮；开阀失败时也用它来提示
+     * 「你可能是因为有未扣账单才开不了」。
+     *
+     * 存整个对象而不是只存日期，因为弹窗要显示**欠了多少钱**。
+     */
+    var unpaidBills by mutableStateOf<List<UnpaidBill>>(emptyList())
+        private set
+
+    /**
+     * **真正能被补扣的账单**：`consumeDate` 非空的那些。
+     *
+     * 代扣接口就是靠 `consumeDate` 定位账单的，日期为空的一笔根本发不出去。
+     * 界面显示的笔数 / 金额、以及 [deductAllUnpaid] 实际扣的，**都必须用这一份**——
+     * 否则会出现「弹窗说共 3 笔、实际只扣 2 笔」，全为空时还会报一次假成功。
+     */
+    val deductibleBills: List<UnpaidBill>
+        get() = unpaidBills.filter { !it.consumeDate.isNullOrBlank() }
+
+    /** 未支付账单的 `consumeDate` 集合。按账单列表匹配按钮显隐时用它 */
+    val unpaidConsumeDates: Set<String>
+        get() = deductibleBills.mapNotNull { it.consumeDate }.toSet()
+
+    /** 正在代扣的那条账单的 consumeDate；非空期间按钮禁用，防止连点重复扣款 */
+    var deductingConsumeDate by mutableStateOf<String?>(null)
+        private set
+
+    /**
+     * 未支付列表请求的单调序号。
+     *
+     * ⚠️ 不能省。刷新入口有四个（钱包页进入、下拉刷新、主页下拉、代扣成功后），
+     * `AnimatedContent` 切页时新旧页面还会并存几百毫秒——**多个请求同时在途是常态**。
+     * 没有序号的话，先发后到的旧响应会把刚扣掉的那笔「复活」，
+     * 用户以为没扣成功再点一次，就是**扣两次**。
+     */
+    private var unpaidSeq = 0
+
+    /** 拉一次未支付列表；失败返回 null（调用方保持原样，不清空） */
+    private suspend fun fetchUnpaid(): List<UnpaidBill>? = try {
+        val resp = NetworkModule.apiService.queryUnpaidBillsSafe(NetworkModule.authFields())
+        if (resp.success) resp.data ?: emptyList() else null
+    } catch (e: CancellationException) {
+        throw e
+    } catch (_: Exception) {
+        null
+    }
+
+    /** 拉未支付账单列表。**失败保持原样，不清空**——清空会让按钮凭空消失 */
+    fun loadUnpaidBills() {
+        if (!PrefsHelper.isLoggedIn) return
+        val requestProject = NetworkModule.currentProjectId()
+        val seq = ++unpaidSeq
+        sessionScope().launch {
+            // 只接受最新一次请求的结果，见 [unpaidSeq]
+            val list = fetchUnpaid() ?: return@launch
+            if (seq == unpaidSeq && NetworkModule.currentProjectId() == requestProject) {
+                unpaidBills = list
+            }
+        }
+    }
+
+    // ── 代扣 ──
+
+    /**
+     * 单笔代扣的结果。**「失败」和「结果未知」必须分开**。
+     *
+     * 分不清的代价很实在：请求已经发到服务端、只是没拿到答复的时候，
+     * 如果报「失败」，界面就会把按钮放回去让用户重试——而服务端可能已经扣过了，
+     * 那一下就是**扣两次**。见 [deductOnce]。
+     */
+    sealed interface DeductResult {
+        data class Ok(val consumeDate: String) : DeductResult
+
+        /** 服务端**明确**说没成（余额不足、账户异常…）。可以放心重试 */
+        data class Failed(val consumeDate: String, val reason: String?) : DeductResult
+
+        /**
+         * 请求发出去了，但没拿到答复（超时、连接断开、会话被取消…）。
+         *
+         * **绝对不能当成失败**，也不该让用户重试，只能重新查一次服务端状态来判断。
+         */
+        data class Unknown(val consumeDate: String) : DeductResult
+    }
+
+    /** 批量补扣的汇总 */
+    data class DeductSummary(
+        val ok: Int,
+        val failed: Int,
+        /** 结果未知的笔数——这些既不能说成功也不能说失败 */
+        val unknown: Int,
+        /**
+         * 第一笔失败时服务端给的原文（「余额不足」之类）。
+         *
+         * 批量路径以前只累加计数、把原因丢了，用户只能看到「请到钱包页重试」。
+         */
+        val firstFailReason: String? = null
+    )
+
+    /**
+     * 扣一笔。**这是唯一碰代扣接口的地方**，单笔和批量都走它，
+     * 免得两处流程各写一遍、改一处漏一处（而这是动钱的路径）。
+     *
+     * ⚠️ `CancellationException` 必须**先于** `Exception` 捕获并重抛：
+     * 它是 `Exception` 的子类，混进下面的 catch 里就会被当成「扣款失败」，
+     * 而请求其实已经发出去了。详见 [DeductResult.Unknown]。
+     */
+    private suspend fun deductOnce(consumeDate: String): DeductResult = try {
+        val resp = NetworkModule.apiService
+            .requestDeductSafe(consumeDate, NetworkModule.authFields())
+        if (resp.success) DeductResult.Ok(consumeDate)
+        else DeductResult.Failed(consumeDate, resp.displayMessage)
+    } catch (e: CancellationException) {
+        throw e
+    } catch (_: Exception) {
+        // 超时 / 断连：请求**可能已经到达服务端**，不能当作失败
+        DeductResult.Unknown(consumeDate)
+    }
+
+    /**
+     * 「结果未知」的收尾：重查一次服务端，以它为准。
+     *
+     * 账单还在列表里 → 说明没扣成（服务端会拒绝重复扣）；不在了 → 说明扣成了。
+     * 这是唯一能确定答案的办法，**不能靠猜**。
+     */
+    private suspend fun reconcileUnpaid(): List<UnpaidBill>? {
+        val list = fetchUnpaid() ?: return null
+        // 让更早发出的刷新全部作废——这份是**刚刚**拿到的，比它们都新。
+        // 不推序号的话，一个还在路上的旧响应回来后会把这里的结论覆盖掉
+        unpaidSeq++
+        unpaidBills = list
+        return list
+    }
+
+    /**
+     * 手动请求代扣（单笔）。
+     *
+     * ⚠️ **这是动钱的接口**，防重是第一要务：
+     * - [deductingConsumeDate] 非空时**回调告知被挡住**，不静默 return
+     *   （静默的话调用方已经把弹窗关了，用户点完什么都不发生）
+     * - 成功后立刻把这条从列表里摘掉，不等网络往返
+     * - 结果未知时不摘、也不报失败，重查服务端定夺
+     */
+    fun requestDeduct(consumeDate: String, onResult: (DeductResult) -> Unit) {
+        if (consumeDate.isBlank()) return
+        if (deductingConsumeDate != null) {
+            // ⑧ 不能静默返回——调用方已经关了弹窗，用户会以为在扣
+            onResult(DeductResult.Failed(consumeDate, BUSY_MESSAGE))
+            return
+        }
+
+        deductingConsumeDate = consumeDate
+        sessionScope().launch {
+            try {
+                val r = deductOnce(consumeDate)
+                when (r) {
+                    is DeductResult.Ok -> {
+                        unpaidBills = unpaidBills.filterNot { it.consumeDate == consumeDate }
+                        loadUnpaidBills()
+                        loadBills()
+                    }
+                    is DeductResult.Unknown -> reconcileUnpaid() ?: loadUnpaidBills()
+                    is DeductResult.Failed -> Unit
+                }
+                onResult(r)
+            } catch (_: CancellationException) {
+                // 会话级取消（挤号 / 退出登录 / 重新登录）。这里**不能报失败**——
+                // 请求可能已经发出去了。清掉锁就够了，界面马上就会被替换掉
+            } finally {
+                deductingConsumeDate = null
+            }
+        }
+    }
+
+    /**
+     * 补扣**全部**未支付账单，一笔一笔来。
+     *
+     * 开阀被未扣账单卡住时用这个：只补一笔往往还是开不了阀，
+     * 而让用户回「钱包」页一笔一笔点太绕。
+     *
+     * @param onResult 传 null 表示**一笔都没发出去**（没有可补的账单，或者被另一个代扣挡住了）
+     */
+    fun deductAllUnpaid(onResult: (DeductSummary?) -> Unit) {
+        if (deductingConsumeDate != null) {
+            onResult(null)          // ⑧ 被挡住了也要回调，不能静默
+            return
+        }
+        // 用和界面显示完全一致的来源，并且去重——review 发现过这里没去重，
+        // 而 unpaidConsumeDates 去了（.toSet()），同一份数据两个口径
+        val dates = unpaidConsumeDates.toList()
+        if (dates.isEmpty()) {
+            onResult(null)
+            return
+        }
+
+        deductingConsumeDate = dates.first()   // 同步置锁，和 requestDeduct 一致
+        sessionScope().launch {
+            var ok = 0
+            var failed = 0
+            var unknown = 0
+            var failReason: String? = null
+            try {
+                for (d in dates) {
+                    deductingConsumeDate = d
+                    when (val r = deductOnce(d)) {
+                        is DeductResult.Ok -> {
+                            ok++
+                            unpaidBills = unpaidBills.filterNot { it.consumeDate == d }
+                        }
+                        is DeductResult.Failed -> {
+                            failed++
+                            if (failReason == null) failReason = r.reason
+                        }
+                        is DeductResult.Unknown -> unknown++
+                    }
+                }
+                // 有未知的才需要重查；全部明确成功时直接刷新即可
+                if (unknown > 0) reconcileUnpaid() ?: loadUnpaidBills() else loadUnpaidBills()
+                loadBills()
+                onResult(DeductSummary(ok, failed, unknown, failReason))
+            } catch (_: CancellationException) {
+                // 会话被取消，剩下的都没发出去。不回调——界面马上要被替换掉
+            } finally {
+                deductingConsumeDate = null
+            }
+        }
+    }
+
+    companion object {
+        /** 被另一个代扣挡住时给用户的说法 */
+        const val BUSY_MESSAGE = "正在处理另一笔代扣，请稍候"
+
+        /**
+         * 事后对账补发通知的时间窗。
+         *
+         * 结算当时可能因为服务端还没算完而误判成「无消费」，账单下来后对账能拿到
+         * 真金额。但那可能是几小时之后——那时用户早就不在等这条通知了，
+         * 凭空弹一条「消费 ¥x.xx」只会吓人一跳。所以只补最近 30 分钟内的。
+         */
+        private const val SETTLEMENT_NOTIFY_GRACE_MS = 30 * 60 * 1000L
+    }
+
+    /** 关掉开阀失败弹窗 */
+    fun clearShowerError() { showerError = null }
+
+    /**
+     * 拉学校名填进「学校」那一行。
+     *
+     * 服务端的 `projectName` 就是学校名，本来就有——以前这里是写死的默认值，
+     * 让用户自己填，纯属多余。**拉不到就保持原样**（默认值或用户手动填过的），
+     * 不覆盖成空串。
+     */
+    fun loadSchoolName() {
+        if (!PrefsHelper.isLoggedIn) return
+        val requestProject = NetworkModule.currentProjectId()
+        sessionScope().launch {
+            try {
+                val n = NetworkModule.apiService.getProjectInfoSafe().data?.projectName
+                if (NetworkModule.currentProjectId() != requestProject) return@launch
+                if (!n.isNullOrBlank() && n != PrefsHelper.schoolName) {
+                    PrefsHelper.schoolName = n
+                    schoolName = n
+                }
+            } catch (e: Exception) {
+                AppLogger.w("读取学校名失败：${e.message}")
+            }
+        }
+    }
+
+    /**
+     * 拉一卡通真实余额。
+     *
+     * **拿不到就保持 null**，界面回退到本地估算——服务端只在学生签约过
+     * 校园卡免密支付时才给 `amount`。
+     */
+    fun loadCampusBalance() {
+        if (!PrefsHelper.isLoggedIn) return
+        val requestProject = NetworkModule.currentProjectId()
+        sessionScope().launch {
+            try {
+                val d = NetworkModule.apiService.getCampusUserInfoSafe().data ?: return@launch
+                if (NetworkModule.currentProjectId() != requestProject) return@launch
+                val amount = d.amount?.toDoubleOrNull()
+                if (amount != null) {
+                    campusBalance = amount
+                    PrefsHelper.campusBalance = d.amount.orEmpty()
+                    PrefsHelper.campusBalanceTime = System.currentTimeMillis()
+                    // 桌面小组件的余额是**渲染时**从 Prefs 读的，不会自己知道值变了。
+                    // 不推一次刷新，它会一直顶着上次渲染的估算值——
+                    // 用户看到的就是「App 里是真余额、桌面上还是估算」。
+                    appContext?.let { MuguangWidget.refreshAll(it) }
+                }
+                // 这个接口顺带也给姓名和学号。它是从**校园卡**那边查的，
+                // 和 /account/info 的数据来源不同——学校没同步学籍时前者为 null、
+                // 这里却有值，正好互补。以前只取了学号，把姓名漏了。
+                applyIdentity(d.studentName, d.studentNumber, null)
+            } catch (e: Exception) {
+                // 余额会回退到本地估算，界面看不出失败；不留日志就永远不知道
+                // 是「没签约」还是「接口挂了」
+                AppLogger.w("读取一卡通余额失败：${e.message}")
+            }
+        }
+    }
+
+    /**
+     * 刷新余额与账单。
+     * 扫描不在这里触发——是否扫描由界面决定（要先确认拿到权限），
+     * 见 MainScreen 的 scanWithPermission()。
+     */
+    fun pullRefresh() {
+        refreshWallet()
+        loadBills()
+        // 一卡通余额是外部账户的钱，会随时变（食堂刷卡、充值都会动），
+        // 下拉刷新时一起拉一次
+        loadCampusBalance()
+        // 残留账单同理——在别处（比如官方 App）补扣掉了，这边也得跟着消失
+        loadUnpaidBills()
+    }
+
+    // ── 设备发现 ──
+    fun addDevice(device: NearbyDevice) {
+        val idx = nearbyDevices.indexOfFirst { it.mac == device.mac }
+        if (idx >= 0) {
+            val e = nearbyDevices[idx]
+            if (abs(e.rssi - device.rssi) > 5) nearbyDevices[idx] = e.copy(rssi = device.rssi)
+        } else {
+            nearbyDevices.add(device)
+        }
+
+        // ⚠️ 每台设备**每轮扫描只查一次**。
+        //
+        // 扫描回调对同一台设备每 ~200ms 就来一条，而"只要这台还没有 deviceInfo 就再查一次"
+        // 会让**查不到**的设备被无限重查（实测日志里 13 秒对同一个 MAC 发了 35 次）。
+        // 设备信息在一轮扫描内不会变，想重试交给下拉刷新（会重新 startScan 并清空本集合）。
+        if (queriedThisScan.add(device.mac)) fetchInfo(device.mac)
+    }
+
+    private fun fetchInfo(mac: String) {
+        val requestProject = NetworkModule.currentProjectId()
+        sessionScope().launch {
+            try {
+                val resp = DeviceInfoCache.load(mac)
+                if (NetworkModule.currentProjectId() != requestProject) return@launch
+                if (resp.success && resp.data != null) {
+                    val info = resp.data; val i = nearbyDevices.indexOfFirst { it.mac == mac }
+                    if (i >= 0) nearbyDevices[i] = nearbyDevices[i].copy(deviceInfo = info)
+                    refreshDeviceStatus(info.snCode)
+                } else checkKick(resp.displayMessage)
+            } catch (e: Exception) { checkKickEx(e) }
+        }
+    }
+
+    // ── 账单 ──
+    fun loadBills(forceRefresh: Boolean = false) {
+        val requestProject = NetworkModule.currentProjectId()
+        val seq = ++billLoadSeq
+        sessionScope().launch {
+            isLoadingBills = true
+            val accountKey = PrefsHelper.userId.ifEmpty { PrefsHelper.telephone }
+            val cacheKey = "${accountKey}_project_$requestProject"
+            if (!forceRefresh) {
+                val cached = PrefsHelper.getCachedBills(cacheKey)
+                if (cached.isNotEmpty()) {
+                    billHistory = cached
+                    billList = cached.take(20)
+                    billsProjectId = requestProject
+                    billsLoaded = true
+                }
+            }
+            try {
+                val fmt = java.text.SimpleDateFormat("yyyy-MM", java.util.Locale.getDefault())
+                val cal = java.util.Calendar.getInstance()
+                val all = mutableListOf<BillItem>()
+                var allRequestsSucceeded = true
+                for (i in 0..2) {
+                    val month = fmt.format(cal.time)
+                    val resp = NetworkModule.apiService.getBillListSafe(month = month)
+                    if (!resp.success) {
+                        allRequestsSucceeded = false
+                        // 某个月查失败时不能让它看起来像「这个月没有消费」——
+                        // 日志里记下月份和服务端原话，才能区分「真没账单」和「接口/网络失败」
+                        AppLogger.w("账单查询失败（$month）：${resp.displayMessage ?: resp.errorCode}")
+                    }
+                    if (resp.success && !resp.data.isNullOrEmpty()) all.addAll(resp.data)
+                    cal.add(java.util.Calendar.MONTH, -1)
+                }
+                if (seq != billLoadSeq || NetworkModule.currentProjectId() != requestProject) {
+                    return@launch
+                }
+                billHistory = all.toList()
+                billList = all.take(20)
+                billsProjectId = requestProject
+                billsLoaded = true
+                if (allRequestsSucceeded) PrefsHelper.saveCachedBills(cacheKey, all)
+                val pendingBefore = PrefsHelper.getPendingSettlements()
+                val reconciliation = SettlementReconciler.reconcile(pendingBefore, all)
+                val pendingBySn = pendingBefore.associateBy { it.snCode }
+                reconciliation.updates.forEach { update ->
+                    PrefsHelper.recordConsume(update.snCode, update.amount)
+
+                    // 结算那会儿要是误判成了「无消费」，这条通知现在还挂着错误金额——
+                    // 拿到了真金额就得把它改成对的，否则用户看到的一直是错的。
+                    //
+                    // ⚠️ 只补最近 [SETTLEMENT_NOTIFY_GRACE_MS] 内的。超过这个时间
+                    // 用户早就不在等这条通知了，凭空弹一条「消费 ¥x.xx」只会吓人一跳。
+                    val p = pendingBySn[update.snCode] ?: return@forEach
+                    val ageMs = System.currentTimeMillis() - p.createdAt
+                    if (ageMs <= SETTLEMENT_NOTIFY_GRACE_MS) {
+                        appContext?.let { ctx ->
+                            Notifier.showFinished(
+                                ctx,
+                                p.deviceName.ifEmpty { "热水器" },
+                                p.elapsedSec,
+                                update.amount
+                            )
+                        }
+                        AppLogger.i(
+                            "结算对账补发通知：${p.snCode} ¥${update.amount}（延迟 ${ageMs / 1000}s）"
+                        )
+                    }
+                }
+                PrefsHelper.savePendingSettlements(reconciliation.remaining)
+                // 顺手把最近一笔消费记给桌面小组件。账单按月倒序拉取，第一条就是最新的。
+                // ⚠️ 只有确认它属于「上次使用设备」时才记——账单接口不带 snCode，只能拿设备名比对。
+                // 比不中就跳过：宁可这次不记录，也别把别的设备的消费记到当前设备头上。
+                val newest = all.firstOrNull()?.consumeBillDTO
+                val lastSn = PrefsHelper.lastDeviceSnCode
+                if (newest != null && lastSn.isNotEmpty() &&
+                    newest.displayDesc == PrefsHelper.lastDeviceName
+                ) {
+                    newest.consumeMoney.toDoubleOrNull()
+                        ?.let { PrefsHelper.recordConsume(lastSn, it) }
+                }
+                // ⚠️ 必须和上面 billList 用的条数一致。
+                // 小组件用这份缓存算「初始余额 − 消费」的估算值，
+                // 只给 2 笔的话减数偏小，桌面上的余额会比 App 里高出一截。
+                // 界面上只渲染 2 行，多存的不影响显示。
+                cacheBillsForWidget(all.take(20))
+                refreshWidgets()
+            } catch (e: Exception) { 
+                checkKickEx(e)
+                // billsLoaded 保持 false，界面会落到「暂无…账单记录」——这句话在
+                // 网络失败时是**错的**（不是没有账单，是没拉到）。至少在日志里
+                // 留下真实原因，排查时能区分两种情况
+                AppLogger.w("加载账单失败（界面会显示「暂无账单」，实为请求失败）：${e.message}")
+                val msg = e.message ?: ""
+                if (msg.contains("Unable to resolve host", ignoreCase = true) ||
+                    msg.contains("No address associated", ignoreCase = true) ||
+                    msg.contains("Network is unreachable", ignoreCase = true) ||
+                    msg.contains("Failed to connect", ignoreCase = true)) {
+                    toastMessage = "网络连接失败，请检查网络设置"
+                }
+            }
+            finally {
+                if (seq == billLoadSeq) isLoadingBills = false
+            }
+        }
+    }
+}

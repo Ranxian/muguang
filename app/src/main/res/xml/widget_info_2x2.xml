@@ -1,0 +1,25 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  2x2：默认 110dp（2 格宽 × 2 格高）。用户可拖成竖向或横向，
+  App 会按实际宽高比在「按钮在下方」和「按钮在右侧」两套布局之间切换。
+
+  · updatePeriodMillis 设 0 —— 系统最小也才 30 分钟，对"启停状态"没意义，
+    刷新完全交给「用户点按」和「App 内状态变化时主动 push」两条路径
+  · previewLayout（API 31+）让系统直接渲染真实布局当预览图；
+    更低版本回落到 previewImage
+  · previewImage 指向自己画的预览图：previewLayout 只在部分桌面生效，
+  红米等 ROM 的组件选择器会忽略它，回落到 previewImage —— 之前那里指向应用图标，
+  所以选择器里一直显示的是淋浴图标而不是小组件的样子。
+-->
+<appwidget-provider xmlns:android="http://schemas.android.com/apk/res/android"
+    android:minWidth="110dp"
+    android:minHeight="110dp"
+    android:targetCellWidth="2"
+    android:targetCellHeight="2"
+    android:resizeMode="horizontal|vertical"
+    android:updatePeriodMillis="0"
+    android:initialLayout="@layout/widget_muguang_2x2"
+    android:previewLayout="@layout/widget_muguang_2x2"
+    android:previewImage="@drawable/widget_preview_2x2"
+    android:description="@string/widget_2x2_description"
+    android:widgetCategory="home_screen" />

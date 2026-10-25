@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  主操作按钮（电源 / 选定）。规范 §11：电源按钮用玻璃底 + 白色图标，不要单独用蓝色。
+  同时 §5 要求边框统一 0.16 白——之前那圈 1.5dp 白边已去掉。
+-->
+<shape xmlns:android="http://schemas.android.com/apk/res/android"
+    android:shape="rectangle">
+    <corners android:radius="12dp" />
+    <solid android:color="#14FFFFFF" />
+    <stroke android:width="1dp" android:color="#29FFFFFF" />
+</shape>

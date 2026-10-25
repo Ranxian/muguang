@@ -1,0 +1,25 @@
+<resources>
+    <string name="app_name">沐光</string>
+
+    <!-- 桌面小组件 -->
+    <string name="widget_1x1_description">一个按钮开关热水（最省地方）</string>
+    <string name="widget_2x2_description">快捷启停热水（简洁）</string>
+    <string name="widget_2x4_description">快捷启停热水（含计时与预扣金额）</string>
+
+    <!-- 1x1 的无障碍描述 -->
+    <string name="widget_1x1_start">开启热水</string>
+    <string name="widget_1x1_stop">停止热水</string>
+    <string name="widget_1x1_occupied">设备正被他人使用</string>
+    <string name="widget_1x1_working">正在操作…</string>
+
+    <!--
+      1x1 顶部的状态小字。
+      最长的是「占用中」三个字，8sp 下约 24dp——格子内容区大概四十多 dp，放得下。
+      再加字就要换行了，别往这儿塞。
+    -->
+    <string name="widget_1x1_state_idle">空闲</string>
+    <string name="widget_1x1_state_using">使用中</string>
+    <string name="widget_1x1_state_occupied">占用中</string>
+    <string name="widget_1x1_state_logged_out">未登录</string>
+    <string name="widget_1x1_state_no_device">没设备</string>
+</resources>

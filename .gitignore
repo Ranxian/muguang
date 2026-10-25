@@ -1,0 +1,33 @@
+# ── Android / Gradle 构建产物 ──
+# 用 build/ 而不是 /build：后者只匹配根目录的 build，克隆后一构建就会出现
+# 未跟踪的 app/build/，很容易被误提交
+build/
+.gradle
+.kotlin
+/captures
+.externalNativeBuild
+.cxx
+*.hprof
+hs_err_pid*.log
+replay_pid*.log
+
+# ── IDE ──
+*.iml
+.idea/
+.DS_Store
+
+# ── 本地配置 ──
+# 里面存着签名密钥路径和密码，绝对不能进仓库
+local.properties
+
+# ── 签名密钥与产物 —— 绝对不能上传！ ──
+*.jks
+*.keystore
+*.apk
+*.aab
+
+# ── WorkBuddy 工作目录（含蓝牙密钥算法等，不能进仓库）──
+.workbuddy/
+
+# ── 本地打包/下载产物 ──
+*.zip

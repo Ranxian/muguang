@@ -1,0 +1,41 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  洗手台 / 洗漱（设备头像）。
+
+  由 SVG 转换而来：按内容包围盒缩放并居中到 24dp 画布里的 20x20 区域，
+  单色填充，实际颜色由使用处 tint 决定。
+
+  ⚠️ 变换放在 <group> 里，pathData 保持和源文件一致——换图重新转一次即可。
+  ⚠️ 包围盒把圆弧**真正扫过的角度范围**算进去了（不是只取端点，也不是
+     取整个椭圆）——少算会把系数算大、内容被画布裁掉；多算会把图标压小。
+-->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="24dp"
+    android:height="24dp"
+    android:viewportWidth="24"
+    android:viewportHeight="24">
+    <group
+        android:scaleX="0.714272"
+        android:scaleY="0.714272"
+        android:translateX="0.5716"
+        android:translateY="0.5716">
+                <path
+            android:pathData="M11.0800 3.7400 a1.056 1.056 0 0 1 1.48 0a1.024 1.024 0 0 1 0 1.47L9.35 8.437l-1.107-.553l-.373-.927z"
+            android:fillColor="#FF000000" />
+        <path
+            android:pathData="M13.9380 6.5900 a1.056 1.056 0 0 1 1.48 0a1.056 1.056 0 0 1 0 1.48L12.2 11.287l-1.23-.301l-.25-1.178z"
+            android:fillColor="#FF000000" />
+        <path
+            android:pathData="M11.1280 2.3100 a1.026 1.026 0 0 0-1.47 0L6.44 5.523l.468.989L7.92 7l3.219-3.213a1.043 1.043 0 0 0-.01-1.477"
+            android:fillColor="#FF000000" />
+        <path
+            android:pathData="M13.9800 5.1600 a1.054 1.054 0 0 0-1.477 0L9.29 8.38l.385.956l1.092.52l3.213-3.21a1.047 1.047 0 0 0 0-1.487"
+            android:fillColor="#FF000000" />
+        <path
+            android:pathData="M15.3580 8.0200 a1.056 1.056 0 0 1 1.48 0c.414.404.414 1.066.01 1.48l-3.218 3.217l-1.208-.456l-.272-1.023z"
+            android:fillColor="#FF000000" />
+        <path
+            android:pathData="M20.7200 17.3240 a12.282 12.282 0 0 0-3.876-2.637a12.28 12.28 0 0 1-3.876-2.636L6.609 5.629a2.086 2.086 0 0 0-2.986 0a2.137 2.137 0 0 0 0 3.016l6.062 6.122l.287.3l13.893 14.042a2.981 2.981 0 0 0 4.252 0a3.053 3.053 0 0 0 0-4.295z"
+            android:fillColor="#FF000000" />
+    </group>
+</vector>

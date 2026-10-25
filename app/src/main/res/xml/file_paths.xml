@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="utf-8"?>
+<paths>
+    <!-- 应用私有文件目录（日志文件所在） -->
+    <files-path name="logs" path="." />
+    <!-- 缓存目录（导出兜底用） -->
+    <cache-path name="cache" path="." />
+</paths>

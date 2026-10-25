@@ -1,0 +1,154 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  1x1：整块就是一个开关。
+
+  各状态是几块**叠在同一位置**的 FrameLayout，靠切 visibility 切换——
+  RemoteViews 运行时改不了背景，这是框架限制，项目里的状态徽章也是这么做的。
+
+  ⚠️ 只有当前可见的那块挂点击，其余几块 setOnClickPendingIntent(null) 清掉。
+  叠着的隐藏块虽然不显示，但布局上仍占位置、仍能收到触摸，不清就会点到看不见的按钮。
+
+  这里**不放设备名、不放计时、不放金额**：一格只有四五十 dp，塞进去谁也看不清。
+  用水期间本来就有一条常驻通知（带「结束用水」按钮），详细信息由它承担。
+  顶部的状态小字只是为了让状态不只靠颜色区分（色弱、或者瞟一眼的时候）。
+-->
+<FrameLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:tools="http://schemas.android.com/tools"
+    tools:ignore="UseAppTint"
+    android:id="@+id/widget_tile_root"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    android:padding="6dp">
+
+    <!-- ① 空闲：玻璃灰 + 电源图标。未登录 / 没选过设备时也复用这块，只换上面的字 -->
+    <FrameLayout
+        android:id="@+id/widget_tile_idle"
+        android:layout_width="match_parent"
+        android:layout_height="match_parent"
+        android:background="@drawable/widget_tile_1x1_idle"
+        android:contentDescription="@string/widget_1x1_start">
+
+        <LinearLayout
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:layout_gravity="center"
+            android:orientation="vertical"
+            android:gravity="center_horizontal">
+
+            <TextView
+                android:id="@+id/widget_tile_idle_label"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:textSize="8sp"
+                android:maxLines="1"
+                android:includeFontPadding="false"
+                android:textColor="#E6FFFFFF"
+                android:text="@string/widget_1x1_state_idle" />
+
+            <ImageView
+                android:layout_width="20dp"
+                android:layout_height="20dp"
+                android:layout_marginTop="1dp"
+                android:src="@drawable/ic_widget_power"
+                android:tint="#FFFFFF"
+                android:contentDescription="@null" />
+        </LinearLayout>
+    </FrameLayout>
+
+    <!-- ② 使用中：蓝色 + 停止图标 -->
+    <FrameLayout
+        android:id="@+id/widget_tile_using"
+        android:layout_width="match_parent"
+        android:layout_height="match_parent"
+        android:background="@drawable/widget_tile_1x1_using"
+        android:visibility="gone"
+        android:contentDescription="@string/widget_1x1_stop">
+
+        <LinearLayout
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:layout_gravity="center"
+            android:orientation="vertical"
+            android:gravity="center_horizontal">
+
+            <TextView
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:textSize="8sp"
+                android:maxLines="1"
+                android:includeFontPadding="false"
+                android:textColor="#FFFFFFFF"
+                android:text="@string/widget_1x1_state_using" />
+
+            <ImageView
+                android:layout_width="20dp"
+                android:layout_height="20dp"
+                android:layout_marginTop="1dp"
+                android:src="@drawable/ic_widget_stop"
+                android:tint="#FFFFFF"
+                android:contentDescription="@null" />
+        </LinearLayout>
+    </FrameLayout>
+
+    <!-- ③ 他人使用中：橙色 + 锁 -->
+    <FrameLayout
+        android:id="@+id/widget_tile_occupied"
+        android:layout_width="match_parent"
+        android:layout_height="match_parent"
+        android:background="@drawable/widget_tile_1x1_occupied"
+        android:visibility="gone"
+        android:contentDescription="@string/widget_1x1_occupied">
+
+        <LinearLayout
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:layout_gravity="center"
+            android:orientation="vertical"
+            android:gravity="center_horizontal">
+
+            <TextView
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:textSize="8sp"
+                android:maxLines="1"
+                android:includeFontPadding="false"
+                android:textColor="#FFFFFFFF"
+                android:text="@string/widget_1x1_state_occupied" />
+
+            <ImageView
+                android:layout_width="20dp"
+                android:layout_height="20dp"
+                android:layout_marginTop="1dp"
+                android:src="@drawable/ic_widget_lock"
+                android:tint="#FFFFFF"
+                android:contentDescription="@null" />
+        </LinearLayout>
+    </FrameLayout>
+
+    <!--
+      ④ 操作中：玻璃底 + 转圈。
+
+      开阀要等 5 秒、关阀加结算要 12 秒以上，这期间 1x1 上原本**什么反馈都没有**，
+      用户只会觉得"点了没反应"然后接着点。
+
+      用 ProgressBar 而不是自己画动画：RemoteViews 跑不了动画，
+      但 ProgressBar 的不确定态是**系统画的**，在桌面上照样转。
+
+      这块不写字——转圈本身已经说明"在操作"，一格塞两行字太挤。
+    -->
+    <FrameLayout
+        android:id="@+id/widget_tile_busy"
+        android:layout_width="match_parent"
+        android:layout_height="match_parent"
+        android:background="@drawable/widget_tile_1x1_idle"
+        android:visibility="gone"
+        android:contentDescription="@string/widget_1x1_working">
+
+        <ProgressBar
+            android:layout_width="24dp"
+            android:layout_height="24dp"
+            android:layout_gravity="center"
+            android:indeterminate="true"
+            android:indeterminateTint="#FFFFFF" />
+    </FrameLayout>
+</FrameLayout>

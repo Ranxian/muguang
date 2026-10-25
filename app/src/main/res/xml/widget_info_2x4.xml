@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- 2x4：宽 250dp（4 格）× 高 110dp（2 格）。左侧图标导航 + 三个页面（设备控制 / 附近设备 / 账单）。 -->
+<appwidget-provider xmlns:android="http://schemas.android.com/apk/res/android"
+    android:minWidth="250dp"
+    android:minHeight="110dp"
+    android:targetCellWidth="4"
+    android:targetCellHeight="2"
+    android:resizeMode="horizontal|vertical"
+    android:updatePeriodMillis="0"
+    android:initialLayout="@layout/widget_muguang_2x4"
+    android:previewLayout="@layout/widget_muguang_2x4"
+    android:previewImage="@drawable/widget_preview_2x4"
+    android:description="@string/widget_2x4_description"
+    android:widgetCategory="home_screen" />

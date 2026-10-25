@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="utf-8"?>
+<full-backup-content>
+    <!-- 加密偏好依赖本机 Keystore，跨设备恢复后无法解密；日志也不应进入云备份。 -->
+    <exclude domain="sharedpref" path="muguang_prefs.xml" />
+    <!--
+      ⚠️ 这份是**明文**回退文件（见 PrefsHelper.FILE_PLAIN，落盘名 = 常量 + ".xml"）。
+      加密初始化失败时登录凭证会落到这里——恰恰是最不该进备份的一份。
+      两份文件名只差一个后缀，加规则时很容易只想起加密那份。
+    -->
+    <exclude domain="sharedpref" path="muguang_prefs_plain.xml" />
+    <exclude domain="file" path="muguang_log.txt" />
+</full-backup-content>

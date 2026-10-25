@@ -1,0 +1,19 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  通知栏小图标。
+
+  必须是**单色剪影**：Android 5.0 起会把通知小图标整体染成白色，
+  拿彩色图或带透明渐变的图上去会糊成一坨白块。所以这里只用纯色路径。
+
+  用「水滴」是因为它在 16dp 下也能一眼认出来，比淋浴喷头那种细碎的图形清楚得多。
+-->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="24dp"
+    android:height="24dp"
+    android:viewportWidth="24"
+    android:viewportHeight="24"
+    android:tint="#FFFFFF">
+    <path
+        android:fillColor="#FF000000"
+        android:pathData="M12,2C6.67,6.55 4,10.48 4,13.8c0,4.98 3.8,8.2 8,8.2s8,-3.22 8,-8.2C20,10.48 17.33,6.55 12,2zM12,20c-3.31,0 -6,-2.46 -6,-6.2 0,-1.9 1.36,-4.66 4,-7.75 1.05,-1.23 2.05,-2.32 2,-2.27 1.5,1.5 6,6.63 6,10.02C18,17.54 15.31,20 12,20z" />
+</vector>
