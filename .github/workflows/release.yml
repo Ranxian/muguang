@@ -39,6 +39,15 @@ jobs:
       - name: Set up Gradle
         uses: gradle/actions/setup-gradle@v4
 
+      # compileSdk = 36；runner 镜像里不一定预装 platforms;android-36。
+      # AGP 能自动下载，但失败时的报错很难读，这里先显式装一遍（已装则是秒过的空操作）。
+      - name: Ensure Android SDK 36
+        run: |
+          SDK="${ANDROID_HOME:-$ANDROID_SDK_ROOT}"
+          yes | "$SDK/cmdline-tools/latest/bin/sdkmanager" --licenses > /dev/null 2>&1 || true
+          "$SDK/cmdline-tools/latest/bin/sdkmanager" \
+            "platforms;android-36" "build-tools;36.0.0" > /dev/null
+
       # 签名密钥只以 base64 形式放在 Secrets 里，落地到临时目录后由 build.gradle.kts
       # 的 signingValue() 从环境变量读走；仓库里永远不出现 .jks
       - name: Decode keystore
