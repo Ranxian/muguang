@@ -36,8 +36,8 @@ android {
         targetSdk = 36
         // 对外版本号走 1.x（1.0 → 1.1）；历史内部编号不再出现。
         // versionCode 必须继续单调递增（内部试构建用过 1~5），否则装不回已经装了内测版的机器。
-        versionCode = 8
-        versionName = "1.1.1"
+        versionCode = 9
+        versionName = "1.1.2"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
         vectorDrawables {

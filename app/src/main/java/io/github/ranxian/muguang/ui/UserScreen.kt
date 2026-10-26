@@ -82,6 +82,7 @@ import io.github.ranxian.muguang.ui.theme.inkOnFill
 import io.github.ranxian.muguang.utils.ApkDownloadState
 import io.github.ranxian.muguang.utils.ApkInstallResult
 import io.github.ranxian.muguang.utils.ApkUpdater
+import io.github.ranxian.muguang.utils.ReleaseNotes
 import io.github.ranxian.muguang.utils.MoneyFormat
 import io.github.ranxian.muguang.utils.PrefsHelper
 import kotlinx.coroutines.delay
@@ -1159,43 +1160,13 @@ private fun formatBytes(bytes: Long): String = when {
 }
 
 /**
- * 从发行版说明中只抽出「新增功能」与「修复」两类内容，其余段落（安装步骤、注意事项等）丢弃。
- * 发行版说明是 Markdown，按 `#` 标题切段落，命中关键词的段落保留整段。
- */
-private fun extractReleaseHighlights(body: String): String {
-    val out = StringBuilder()
-    var keeping = false
-    body.lines().forEach { raw ->
-        val line = raw.trimEnd()
-        if (line.trimStart().startsWith("#")) {
-            val title = plainHeading(line)
-            keeping = title.contains("新增") || title.contains("功能") ||
-                      title.contains("修复") || title.contains("BUG", ignoreCase = true)
-            if (keeping) {
-                if (out.isNotEmpty()) out.append('\n')
-                out.append(stripMarkdown(title)).append('\n')
-            }
-        } else if (keeping) {
-            out.append(stripMarkdown(line)).append('\n')
-        }
-    }
-    return out.toString().trim()
-}
-
-/**
- * 去掉 Markdown 强调标记。
+ * 「更新日志」正文清洗。
  *
- * 发行版说明是按 Markdown 写的，但 App 里用的是普通 Text 渲染（没有 Markdown 解析），
- * 不处理的话 `**加粗**` 会把星号原样显示出来，`反引号` 同理。
+ * ⚠️ 旧实现只保留标题含「新增 / 功能 / 修复」的段落，而发行说明实际是平铺列表
+ * （1.0 / 1.1 都没有那种标题）——展开后一个字不剩，显示「本版本未填写更新详情」。
+ * 规则已收敛到 [ReleaseNotes]：去样板行、去 Markdown 标记、超长截断。
  */
-private fun stripMarkdown(s: String): String =
-    s.replace("**", "").replace("__", "").replace("`", "")
-
-/** 去掉标题里的 `#`、表情符号和多余空白，只保留中日韩文字与 ASCII */
-private fun plainHeading(line: String): String =
-    line.trimStart().trimStart('#').trim()
-        .filter { c -> c.code in 0x4E00..0x9FFF || c.code in 0x3000..0x303F || c.code in 0x20..0x7E }
-        .trim()
+private fun releaseNotesText(body: String): String = ReleaseNotes.extract(body)
 
 @Composable
 private fun ReleaseRow(
@@ -1238,7 +1209,7 @@ private fun ReleaseRow(
         }
         if (expanded) {
             Text(
-                extractReleaseHighlights(release.body).ifBlank { "本版本未填写更新详情。" },
+                releaseNotesText(release.body).ifBlank { "本版本未填写更新详情。" },
                 fontSize = 12.sp, color = AppColors.TextSecondary,
                 modifier = Modifier.padding(bottom = 6.dp)
             )
