@@ -163,6 +163,35 @@ private fun parseGiteeReleaseObject(o: com.google.gson.JsonObject): UpdateReleas
 }
 
 /**
+ * 从列表里挑最新版本（**与列表顺序无关**）。
+ *
+ * ⚠️ Gitee 的 releases 接口按**旧 → 新**返回（实测新建 v1.1.1 后列表仍是
+ * v1.0, v1.1, v1.1.1 的顺序），GitHub 才是新 → 旧。兜底路径不能拿
+ * `firstOrNull()` 当最新——那会把最老的当成最新，永远提示不了更新。
+ * 这里用版本号比较选最大，两个源的顺序差异都不影响。
+ */
+internal fun pickLatestRelease(releases: List<UpdateRelease>): UpdateRelease? {
+    var best: UpdateRelease? = null
+    for (r in releases) {
+        if (r.prerelease || r.tagName.isBlank()) continue
+        if (best == null || io.github.ranxian.muguang.utils.ApkUpdater.isNewer(r.tagName, best.tagName)) {
+            best = r
+        }
+    }
+    return best
+}
+
+/** 按版本号新 → 旧排序（调用方习惯拿 firstOrNull() 当最新） */
+internal fun sortNewestFirst(releases: List<UpdateRelease>): List<UpdateRelease> =
+    releases.sortedWith { a, b ->
+        when {
+            io.github.ranxian.muguang.utils.ApkUpdater.isNewer(a.tagName, b.tagName) -> -1
+            io.github.ranxian.muguang.utils.ApkUpdater.isNewer(b.tagName, a.tagName) -> 1
+            else -> 0
+        }
+    }
+
+/**
  * 更新源 API 客户端（Release / 仓库信息）。
  *
  * 双源：GitHub 为主（[FEED_REPO]），Gitee 镜像为兜底（[MIRROR_REPO]）。
@@ -241,13 +270,15 @@ object UpdateApi {
             AppLogger.e("解析 release 失败", e)
         }
         val giteeJson = getGiteeJson("/repos/$GITEE_REPO/releases/latest")
-            ?: return fetchGiteeReleases().firstOrNull()
-        return try {
-            parseGiteeRelease(giteeJson)
-        } catch (e: Exception) {
-            AppLogger.e("解析 Gitee release 失败", e)
-            null
+        if (giteeJson != null) {
+            try {
+                parseGiteeRelease(giteeJson)?.let { return it }
+            } catch (e: Exception) {
+                AppLogger.e("解析 Gitee release 失败", e)
+            }
         }
+        // /releases/latest 不可用（或解析失败）时回落到列表里挑最大版本
+        return pickLatestRelease(fetchGiteeReleases())
     }
 
     /**
@@ -272,7 +303,8 @@ object UpdateApi {
             emptyList()
         }
         if (github.isNotEmpty()) return github
-        return fetchGiteeReleases()
+        // Gitee 列表是旧→新，必须自己排一遍再交给「拿第一当最新」的调用方
+        return sortNewestFirst(fetchGiteeReleases())
     }
 
     /** Gitee 镜像仓库的发行版列表（最新在前，滤掉预发布）；失败返回空列表 */

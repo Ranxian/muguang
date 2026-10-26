@@ -133,11 +133,11 @@ jobs:
           REPO="${GITEE_REPO:-muguang}"
           BASE="https://gitee.com/api/v5/repos/$OWNER/$REPO/releases"
 
-          BODY=$(printf '沐光 MUGUANG v%s（arm64-v8a，Android 8.0+）\n\n更新检查走 GitHub Releases，下载镜像走本页附件。' "${{ steps.stage.outputs.version }}")
-
+          # 发行说明用与 GitHub 同一份 release-notes.md（CHANGELOG 对应节）：
+          # 以前这里只写一句概述，从 Gitee 看更新内容的用户看不到实际更新点
           RESP=$(curl -sS -X POST "$BASE?access_token=$GITEE_TOKEN" \
             -H 'Content-Type: application/json' \
-            -d "$(jq -n --arg t "$TAG" --arg n "$NAME" --arg b "$BODY" \
+            -d "$(jq -n --arg t "$TAG" --arg n "$NAME" --rawfile b release-notes.md \
                   '{tag_name:$t,name:$n,body:$b,target_commitish:"main",prerelease:false}')" || true)
           echo "$RESP" | head -c 600
 

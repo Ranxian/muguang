@@ -198,4 +198,25 @@ class UpdateApiParseTest {
         assertTrue(io.github.ranxian.muguang.utils.ApkUpdater.isNewer("v1.1.1", "v1.1"))
         assertFalse(io.github.ranxian.muguang.utils.ApkUpdater.isNewer("v1.1", "v1.1"))
     }
+
+    @Test
+    fun `Gitee 列表旧在前也能挑出最新`() {
+        // 实测 Gitee v5：新建 v1.1.1 后列表返回顺序是 v1.0, v1.1, v1.1.1（旧→新）
+        val old = parseGiteeRelease("""{"tag_name":"v1.0"}""")!!
+        val mid = parseGiteeRelease("""{"tag_name":"v1.1"}""")!!
+        val new = parseGiteeRelease("""{"tag_name":"v1.1.1"}""")!!
+        assertEquals("v1.1.1", pickLatestRelease(listOf(old, mid, new))!!.tagName)
+        assertEquals(
+            listOf("v1.1.1", "v1.1", "v1.0"),
+            sortNewestFirst(listOf(old, new, mid)).map { it.tagName }
+        )
+    }
+
+    @Test
+    fun `挑最新时跳过预发布`() {
+        val stable = parseGiteeRelease("""{"tag_name":"v1.1.1"}""")!!
+        val rc = parseGiteeRelease("""{"tag_name":"v2.0.0-rc1","prerelease":true}""")!!
+        assertEquals("v1.1.1", pickLatestRelease(listOf(rc, stable))!!.tagName)
+        assertNull(pickLatestRelease(emptyList()))
+    }
 }
