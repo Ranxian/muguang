@@ -11,18 +11,26 @@ import java.util.concurrent.TimeUnit
 /**
  * 发布源仓库（GitHub API 的 owner/repo 形式）。
  *
- * **检查更新走 GitHub API**：`api.github.com` 在国内实测能通（约 0.6 秒）。
+ * **检查更新首选 GitHub**；不可达时自动兜底到 Gitee（见 [UpdateApi.fetchReleases]）。
+ * 2026-10 国内网络实测：api.github.com 会整段连接重置，只靠 GitHub 的话
+ * 检查更新永远静默失败——用户收不到任何新版本提示。
  */
 private const val FEED_REPO = "Ranxian/muguang"
 
 /**
  * Gitee 镜像仓库（同样 owner/repo）。
  *
- * 只用来**加速下载安装包**：GitHub 的 Release 附件在大陆走
- * `objects.githubusercontent.com`，实测只有约 100 KB/s；Gitee 约 2 MB/s。
- * 检查更新本身不经过这里，所以镜像没同步时也能正常提示有新版本。
+ * 两个用途：
+ * 1. **加速下载安装包**：GitHub 附件在大陆走 `objects.githubusercontent.com`，
+ *    实测约 100 KB/s；Gitee 约 2 MB/s。
+ * 2. **检查更新的兜底源**：GitHub API 连不上时改读 Gitee 发行版列表比版本号。
+ *    Gitee 与 GitHub 的 tag / 附件名保持一致（发版流程保证），
+ *    所以拿到哪个源的信息都能拼出可用的下载直链。
  */
 private const val MIRROR_REPO = "dyed-string/muguang"
+
+/** Gitee OpenAPI v5 根地址（国内可达性好于 api.github.com） */
+private const val GITEE_API = "https://gitee.com/api/v5"
 
 /** 发行版里的一个附件（这里主要用 APK） */
 data class UpdateAsset(
@@ -118,13 +126,52 @@ private fun parseReleaseObject(o: com.google.gson.JsonObject): UpdateRelease = U
 )
 
 /**
- * 更新源 API 客户端（Release / 仓库信息，协议与 GitHub Release JSON 兼容）。
+ * Gitee 发行版 JSON → [UpdateRelease]。
  *
+ * 与 GitHub 的字段差异（实测 v5 响应）：
+ * - 没有 `html_url` / `published_at`：页面地址用 tag 拼，时间取 `created_at`
+ * - 附件同样有 `browser_download_url`，`size` 可能缺失（当 0 处理，仅展示用）
+ *
+ * 抽成顶层 internal 便于单测：解析错字段的用户侧表现是「发了新版却收不到提示」。
+ */
+internal fun parseGiteeRelease(json: String): UpdateRelease? =
+    try {
+        parseGiteeReleaseObject(JsonParser.parseString(json).asJsonObject)
+    } catch (e: Exception) {
+        AppLogger.e("解析 Gitee release 失败", e)
+        null
+    }
+
+private fun parseGiteeReleaseObject(o: com.google.gson.JsonObject): UpdateRelease {
+    val tag = o.get("tag_name")?.asString ?: ""
+    return UpdateRelease(
+        tagName = tag,
+        name = o.get("name")?.asString ?: "",
+        body = o.get("body")?.asString ?: "",
+        publishedAt = o.get("created_at")?.asString ?: "",
+        htmlUrl = o.get("html_url")?.asString
+            ?: if (tag.isNotBlank()) "https://gitee.com/$MIRROR_REPO/releases/tag/$tag" else "",
+        prerelease = o.get("prerelease")?.asBoolean ?: false,
+        assets = o.getAsJsonArray("assets")?.mapNotNull { el ->
+            val a = el.asJsonObject
+            val url = a.get("browser_download_url")?.asString
+            val name = a.get("name")?.asString
+            if (url.isNullOrEmpty() || name.isNullOrEmpty()) null
+            else UpdateAsset(name, url, a.get("size")?.asLong ?: 0L)
+        } ?: emptyList()
+    )
+}
+
+/**
+ * 更新源 API 客户端（Release / 仓库信息）。
+ *
+ * 双源：GitHub 为主（[FEED_REPO]），Gitee 镜像为兜底（[MIRROR_REPO]）。
  * [FEED_REPO] 为空时视为未配置：全部方法返回 null/空，不发起任何网络请求。
  */
 object UpdateApi {
     private const val BASE = "https://api.github.com"
     private const val REPO = FEED_REPO
+    private const val GITEE_REPO = MIRROR_REPO
 
     private val client = OkHttpClient.Builder()
         .connectTimeout(8, TimeUnit.SECONDS)
@@ -164,13 +211,41 @@ object UpdateApi {
         }
     }
 
-    /** 最新 Release；失败返回 null */
+    /** Gitee API 请求；失败返回 null（与 [getJson] 同一套失败语义：静默降级） */
+    private suspend fun getGiteeJson(path: String): String? =
+        withContext(Dispatchers.IO) {
+            try {
+                val req = Request.Builder()
+                    .url("$GITEE_API$path")
+                    .header("User-Agent", "Muguang-Android")
+                    .build()
+                client.newCall(req).execute().use { resp ->
+                    if (!resp.isSuccessful) {
+                        AppLogger.w("Gitee 更新源 ${resp.code} $path")
+                        return@withContext null
+                    }
+                    resp.body?.string()
+                }
+            } catch (e: Exception) {
+                AppLogger.w("Gitee 更新源请求失败 $path: ${e.message}")
+                null
+            }
+        }
+
+    /** 最新 Release；GitHub 失败时兜底 Gitee，两者都失败返回 null */
     suspend fun fetchLatestRelease(): UpdateRelease? {
-        val json = getJson("/repos/$REPO/releases/latest") ?: return null
-        return try {
-            parseRelease(JsonParser.parseString(json).asJsonObject)
+        try {
+            val json = getJson("/repos/$REPO/releases/latest")
+            if (json != null) parseRelease(JsonParser.parseString(json).asJsonObject)?.let { return it }
         } catch (e: Exception) {
             AppLogger.e("解析 release 失败", e)
+        }
+        val giteeJson = getGiteeJson("/repos/$GITEE_REPO/releases/latest")
+            ?: return fetchGiteeReleases().firstOrNull()
+        return try {
+            parseGiteeRelease(giteeJson)
+        } catch (e: Exception) {
+            AppLogger.e("解析 Gitee release 失败", e)
             null
         }
     }
@@ -180,15 +255,35 @@ object UpdateApi {
      *
      * **滤掉预发布**：调用方拿 `firstOrNull()` 当"最新版"来比对，
      * 不过滤的话，只要发过一个标记为 pre-release 的测试版，所有人都会被提示更新到它。
+     *
+     * 先查 GitHub；GitHub 不可达（国内会整段连接重置）时改查 Gitee 镜像仓库。
+     * 两个源的 tag 与附件名保持一致，所以无论拿到哪边的数据，下载直链都拼得出来。
      */
     suspend fun fetchReleases(): List<UpdateRelease> {
-        val json = getJson("/repos/$REPO/releases?per_page=10") ?: return emptyList()
-        return try {
-            JsonParser.parseString(json).asJsonArray
-                .map { el -> parseRelease(el.asJsonObject) }
-                .filterNot { it.prerelease }
+        val github = try {
+            val json = getJson("/repos/$REPO/releases?per_page=10")
+            json?.let {
+                JsonParser.parseString(it).asJsonArray
+                    .map { el -> parseRelease(el.asJsonObject) }
+                    .filterNot { it.prerelease }
+            }.orEmpty()
         } catch (e: Exception) {
             AppLogger.e("解析 releases 失败", e)
+            emptyList()
+        }
+        if (github.isNotEmpty()) return github
+        return fetchGiteeReleases()
+    }
+
+    /** Gitee 镜像仓库的发行版列表（最新在前，滤掉预发布）；失败返回空列表 */
+    private suspend fun fetchGiteeReleases(): List<UpdateRelease> {
+        val json = getGiteeJson("/repos/$GITEE_REPO/releases?per_page=10&page=1") ?: return emptyList()
+        return try {
+            JsonParser.parseString(json).asJsonArray
+                .mapNotNull { el -> parseGiteeRelease(el.toString()) }
+                .filterNot { it.prerelease }
+        } catch (e: Exception) {
+            AppLogger.e("解析 Gitee releases 失败", e)
             emptyList()
         }
     }

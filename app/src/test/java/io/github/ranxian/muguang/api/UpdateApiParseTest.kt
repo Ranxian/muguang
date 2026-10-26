@@ -135,4 +135,67 @@ class UpdateApiParseTest {
         val r = parseGithubRelease(realReleaseJson())!!
         assertFalse(io.github.ranxian.muguang.utils.ApkUpdater.isNewer(r.tagName, "1.2.0"))
     }
+
+    // ── Gitee 发行版（检查更新的兜底源，字段与 GitHub 不同）──
+
+    /** 取自 Gitee OpenAPI v5 releases 的真实结构（节选，字段名原样保留） */
+    private val giteeReleaseJson = """
+        {
+          "id": 1241854,
+          "tag_name": "v1.1.1",
+          "target_commitish": "main",
+          "name": "沐光 v1.1.1",
+          "body": "双源检查更新",
+          "prerelease": false,
+          "created_at": "2026-10-26T12:00:00+08:00",
+          "assets": [
+            {
+              "name": "muguang-1.1.1-arm64-v8a.apk",
+              "browser_download_url": "https://gitee.com/dyed-string/muguang/releases/download/v1.1.1/muguang-1.1.1-arm64-v8a.apk"
+            }
+          ]
+        }
+    """.trimIndent()
+
+    @Test
+    fun `Gitee release 字段映射`() {
+        val r = parseGiteeRelease(giteeReleaseJson)!!
+        assertEquals("v1.1.1", r.tagName)
+        assertEquals("沐光 v1.1.1", r.name)
+        assertEquals("双源检查更新", r.body)
+        assertEquals("2026-10-26T12:00:00+08:00", r.publishedAt)
+        assertFalse(r.prerelease)
+        val apk = r.apkAsset!!
+        assertEquals("muguang-1.1.1-arm64-v8a.apk", apk.name)
+        assertEquals(
+            "https://gitee.com/dyed-string/muguang/releases/download/v1.1.1/muguang-1.1.1-arm64-v8a.apk",
+            apk.downloadUrl
+        )
+    }
+
+    @Test
+    fun `Gitee 没有 html_url 时用 tag 拼页面地址`() {
+        val r = parseGiteeRelease(giteeReleaseJson)!!
+        assertEquals("https://gitee.com/dyed-string/muguang/releases/tag/v1.1.1", r.htmlUrl)
+        // 拿 Gitee 的数据也能拼出可用的下载直链（镜像链与浏览器直链同一地址）
+        assertEquals(r.apkAsset!!.downloadUrl, r.directApkUrl)
+    }
+
+    @Test
+    fun `Gitee 预发布标记要能读出来`() {
+        val r = parseGiteeRelease("""{"tag_name":"v2.0.0-rc1","prerelease":true}""")!!
+        assertTrue(r.prerelease)
+    }
+
+    @Test
+    fun `Gitee 解析失败返回 null`() {
+        assertNull(parseGiteeRelease("{not json"))
+        assertNull(parseGiteeRelease("[]"))
+    }
+
+    @Test
+    fun `Gitee 的 tag 能参与版本比较`() {
+        assertTrue(io.github.ranxian.muguang.utils.ApkUpdater.isNewer("v1.1.1", "v1.1"))
+        assertFalse(io.github.ranxian.muguang.utils.ApkUpdater.isNewer("v1.1", "v1.1"))
+    }
 }

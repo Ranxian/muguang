@@ -1,6 +1,6 @@
 # 沐光 (Muguang)
 
-> 趣智校园的第三方无广告平替 · Android（Kotlin / Jetpack Compose）· v1.1 · MIT
+> 趣智校园的第三方无广告平替 · Android（Kotlin / Jetpack Compose）· v1.1.1 · MIT
 
 官方的趣智校园，能用的功能就那几个，但开屏、活动、推荐一样不少。沐光只做该做的事：打开就能启停热水、看余额和账单，
 不弹广告、不推活动、不收集多余信息。
