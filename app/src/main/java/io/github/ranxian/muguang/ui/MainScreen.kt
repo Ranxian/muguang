@@ -828,14 +828,18 @@ private fun P1HomeDrawer(
     val navLift = 84.dp
     val collapsedOffset = with(LocalDensity.current) { (drawerH - handleH).toPx() }
     var offsetPx by remember(collapsedOffset) { mutableFloatStateOf(collapsedOffset) }
-    // sheet 是白 80% 叠在照片 + 32% 黑遮罩上，最浅会到 #E8E8EA 附近。
-    // 次级文字按这个最浅底色验收：原来的 #6E6E73 只有 4.14:1 且实测更浅时跌到 3.x，
-    // 换成 #4A4A4F 后是 7.20:1（纯白上 8.81:1），视觉层级不变。
-    val sheetInk = Color(0xFF1D1D1F)          // 主文字 13.75:1
-    val sheetInkSecondary = Color(0xFF4A4A4F) // 次级文字 7.20:1
-    val sheetChevron = Color(0xFF7C7C82)      // › 非文字图形 3.39:1（≥3:1）
-    val sheetLink = Color(0xFF0066CC)         // 链接文字 4.55:1（原 #0071E3 仅 3.84:1）
-    val sheetIcon = Color(0xFF0071E3)         // 图标 3.84:1（图形 ≥3:1）
+    // 抽屉面板：浅色=白纸、深色=深色面板。
+    // 以前面板和把手把白色写死，深色模式底部是一条白得发光的板压在近黑导航带上，
+    // 一白一黑很难看；现在文字/图形色跟着面板一起翻（各档对比度按各自底色验收：
+    // 浅色仍是原来的 13.75/7.20/3.39/4.55，深色走 ink / inkMuted / inkSubtle / accent）。
+    val sheetPalette = Design.palette
+    val darkSheet = sheetPalette.isDark
+    val sheetBg = if (darkSheet) sheetPalette.surface else Color.White
+    val sheetInk = if (darkSheet) sheetPalette.ink else Color(0xFF1D1D1F)
+    val sheetInkSecondary = if (darkSheet) sheetPalette.inkMuted else Color(0xFF4A4A4F)
+    val sheetChevron = if (darkSheet) sheetPalette.inkSubtle else Color(0xFF7C7C82)
+    val sheetLink = if (darkSheet) sheetPalette.accent else Color(0xFF0066CC)
+    val sheetIcon = if (darkSheet) sheetPalette.accent else Color(0xFF0071E3)
     // 收起深度 = sheet 实测高度 − 把手高度：收起只露把手，内部内容不可见
     val scope = rememberCoroutineScope()
     // 必须是 State：抽屉拖动时 offsetPx 每帧变化 → 每帧重组，
@@ -917,7 +921,11 @@ private fun P1HomeDrawer(
                 Modifier
                     .fillMaxWidth()
                     .height(handleH)
-                    .background(Color.White.copy(alpha = handleAlpha))
+                    // 跟着面板翻：深色下是一块深色把手，不再是一条白色发光的板
+                    .background(
+                        if (darkSheet) sheetPalette.surface.copy(alpha = handleAlpha)
+                        else Color.White.copy(alpha = handleAlpha)
+                    )
                     .clickable { if (!dragged) animateTo(if (isOpen) collapsedOffset else 0f) },
                 contentAlignment = Alignment.Center
             ) {
@@ -926,7 +934,7 @@ private fun P1HomeDrawer(
                         .width(38.dp)
                         .height(5.dp)
                         .clip(RoundedCornerShape(999.dp))
-                        .background(Color(0xFFC7C7CC))
+                        .background(if (darkSheet) Color(0x4DFFFFFF) else Color(0xFFC7C7CC))
                 )
             }
             // 把手留在滚动区外：拖拽手势始终从把手起手，内容区只负责滚动
@@ -937,9 +945,10 @@ private fun P1HomeDrawer(
                     // 跟着内容走的，内容不满时不会占满，白底就盖不到抽屉底部，
                     // 会从面板下沿漏出一条照片（180px 左右）
                     .weight(1f)
-                    // 实色只留给内容区：半透明白（试过 0.80 / 0.96）拉开时会透出
-                    // 主页余额卡，「¥52.30」「已筛选…」和自己的行叠在一起，两套字互相干扰
-                    .background(Color.White)
+                    // 实色只留给内容区：半透明（试过 0.80 / 0.96）拉开时会透出
+                    // 主页余额卡，「¥52.30」「已筛选…」和自己的行叠在一起，两套字互相干扰。
+                    // 深色模式换成深色面板（见 sheetBg 的说明）
+                    .background(sheetBg)
                     .verticalScroll(rememberScrollState())
             ) {
                 // 探测行：雷达 + 「探测」标题左对齐一行；展开抽屉自动转三圈并触发扫描。
@@ -1165,7 +1174,7 @@ private fun P1HomeDrawer(
                         .padding(horizontal = 22.dp)
                         .fillMaxWidth()
                         .height(1.dp)
-                        .background(Color(0x14000000))
+                        .background(if (darkSheet) Color(0x1FFFFFFF) else Color(0x14000000))
                 )
                 if (!hasScanPerm) {
                     Row(

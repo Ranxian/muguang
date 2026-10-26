@@ -23,6 +23,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.scale
 import androidx.compose.ui.graphics.Brush
+import androidx.compose.ui.graphics.lerp
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.luminance
 import androidx.compose.ui.graphics.painter.Painter
@@ -54,6 +55,11 @@ fun FloatingPillNavBar(
     val isDark = AppColors.isDark
     val p = Design.palette
     val sf = Design.surface
+    // 深色底座的「抬升色」：surface 原色在 OLED 上就是一块近黑，
+    // 压在照片底下读起来像被掏空的黑洞。混 7% 白（各风格色相保留）后
+    // 它是一条明确可辨的暗色栏；胶囊再抬 10%，浮在栏上有层次
+    val darkDock = lerp(p.surface, Color.White, 0.07f)
+    val darkPill = lerp(p.surface, Color.White, 0.10f)
     val pillShape = if (Design.shapes.cutCorner) {
         CutCornerShape(topEnd = 12.dp, bottomStart = 12.dp)
     } else {
@@ -63,6 +69,9 @@ fun FloatingPillNavBar(
     Box(
         modifier = modifier
             .fillMaxWidth()
+            // 深色下把系统手势条那一截也涂成底座色：不然胶囊栏底下还会
+            // 露出一条照片暗角，和抬亮的栏拼在一起像漏光
+            .background(if (isDark) darkDock else Color.Transparent)
             .navigationBarsPadding(),
         contentAlignment = Alignment.BottomCenter
     ) {
@@ -76,10 +85,15 @@ fun FloatingPillNavBar(
                 .fillMaxWidth()
                 .height(84.dp)
                 .background(
-                    Brush.verticalGradient(
-                        0f to p.surface.copy(alpha = if (isDark) 0.86f else 0.90f),
-                        0.5f to p.surface.copy(alpha = if (isDark) 0.93f else 0.95f),
-                        1f to p.surface.copy(alpha = if (isDark) 0.97f else 0.98f)
+                    // 深色：抬亮的暗色栏（近实色，靠上沿的半透明收口提示它是浮层）；
+                    // 浅色：原来的白纸渐变
+                    if (isDark) Brush.verticalGradient(
+                        0f to darkDock.copy(alpha = 0.94f),
+                        1f to darkDock
+                    ) else Brush.verticalGradient(
+                        0f to p.surface.copy(alpha = 0.90f),
+                        0.5f to p.surface.copy(alpha = 0.95f),
+                        1f to p.surface.copy(alpha = 0.98f)
                     )
                 )
         ) {
@@ -88,15 +102,19 @@ fun FloatingPillNavBar(
                 Modifier
                     .fillMaxWidth()
                     .height(1.dp)
-                    .background(p.hairline)
+                    .background(if (isDark) Color.White.copy(alpha = 0.10f) else p.hairline)
             )
         }
         Surface(
             shape = pillShape,
-            // 深色下留一点透明度，让页面底色透上来；浅色下用实色纸面，
-            // 描边已经足够勾轮廓，再叠阴影会脏。
-            color = if (isDark) p.surface.copy(alpha = 0.88f) else p.surface,
-            border = if (sf.bordered) BorderStroke(1.dp, p.hairline) else null,
+            // 深色：胶囊比底座再抬一档 + 白色细描边，浮在栏上有层次；
+            // 浅色：实色纸面，描边已经足够勾轮廓，再叠阴影会脏。
+            color = if (isDark) darkPill else p.surface,
+            border = when {
+                isDark -> BorderStroke(1.dp, Color.White.copy(alpha = 0.10f))
+                sf.bordered -> BorderStroke(1.dp, p.hairline)
+                else -> null
+            },
             shadowElevation = if (sf.shadow > 0.dp) 8.dp else 0.dp,
             tonalElevation = 0.dp,
             modifier = Modifier
