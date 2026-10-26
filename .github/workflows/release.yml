@@ -132,27 +132,55 @@ jobs:
           OWNER="${GITEE_OWNER:-Ranxian}"
           REPO="${GITEE_REPO:-muguang}"
           BASE="https://gitee.com/api/v5/repos/$OWNER/$REPO/releases"
+          APK="${{ steps.stage.outputs.name }}"
 
-          # 发行说明用与 GitHub 同一份 release-notes.md（CHANGELOG 对应节）：
-          # 以前这里只写一句概述，从 Gitee 看更新内容的用户看不到实际更新点
-          RESP=$(curl -sS -X POST "$BASE?access_token=$GITEE_TOKEN" \
-            -H 'Content-Type: application/json' \
-            -d "$(jq -n --arg t "$TAG" --arg n "$NAME" --rawfile b release-notes.md \
-                  '{tag_name:$t,name:$n,body:$b,target_commitish:"main",prerelease:false}')" || true)
-          echo "$RESP" | head -c 600
-
-          REL_ID=$(echo "$RESP" | jq -r '.id // empty')
+          # ① 已有同名发行版就复用（重发/重试场景）：以前一律 POST 新建，
+          #    发行版已存在时直接失败，附件永远传不上去（v1.1.2 就踩了）
+          REL_ID=$(curl -sS "$BASE/tags/$TAG?access_token=$GITEE_TOKEN" | jq -r '.id // empty' || true)
           if [ -z "$REL_ID" ]; then
-            echo "::warning::Gitee 建发行版失败（tag 未推送或 token 权限不足），跳过附件上传"
+            # ② 没有才新建；发行说明用与 GitHub 同一份 release-notes.md（CHANGELOG 对应节）
+            RESP=$(curl -sS -X POST "$BASE?access_token=$GITEE_TOKEN" \
+              -H 'Content-Type: application/json' \
+              -d "$(jq -n --arg t "$TAG" --arg n "$NAME" --rawfile b release-notes.md \
+                    '{tag_name:$t,name:$n,body:$b,target_commitish:"main",prerelease:false}')" || true)
+            echo "$RESP" | head -c 600
+            REL_ID=$(echo "$RESP" | jq -r '.id // empty')
+          else
+            echo "复用已有发行版 id=$REL_ID"
+          fi
+          if [ -z "$REL_ID" ]; then
+            echo "::warning::Gitee 发行版不可用（tag 未推送或 token 权限不足），跳过附件上传"
             exit 0
           fi
 
-          curl -sS -X POST \
-            "$BASE/$REL_ID/attach_files?access_token=$GITEE_TOKEN" \
-            -F "file=@${{ steps.stage.outputs.name }}"
+          # ③ 已有附件先删（同名的），避免重发后附件堆成两份
+          EXISTING=$(curl -sS "$BASE/$REL_ID/attach_files?access_token=$GITEE_TOKEN" | jq -r '.[].name' 2>/dev/null || true)
+          for f in "$APK" "$APK.sha256"; do
+            if echo "$EXISTING" | grep -qx "$f"; then
+              AID=$(curl -sS "$BASE/$REL_ID/attach_files?access_token=$GITEE_TOKEN" \
+                | jq -r --arg n "$f" '.[] | select(.name==$n) | .id' 2>/dev/null | head -1)
+              [ -n "$AID" ] && curl -sS -X DELETE \
+                "$BASE/$REL_ID/attach_files/$AID?access_token=$GITEE_TOKEN" > /dev/null || true
+            fi
+          done
 
-          # 校验文件也要传：只传 APK 的话，镜像页上点 .sha256 是 404，
-          # 附件集和 GitHub 那边对不上。
-          curl -sS -X POST \
-            "$BASE/$REL_ID/attach_files?access_token=$GITEE_TOKEN" \
-            -F "file=@${{ steps.stage.outputs.name }}.sha256"
+          # ④ 上传附件并**校验结果**：20MB 上传偶发超时，单次 curl 失败就静默跳过，
+          #    Gitee 页面上只剩源码包（v1.1.2 实际表现）。这里带重试并在最后核对附件列表
+          for f in "$APK" "$APK.sha256"; do
+            ok=0
+            for attempt in 1 2 3; do
+              echo "上传 $f（第 $attempt 次）"
+              if curl -sS --retry 2 --retry-delay 5 --max-time 600 -X POST \
+                  "$BASE/$REL_ID/attach_files?access_token=$GITEE_TOKEN" \
+                  -F "file=@$f" | grep -q '"name"'; then
+                ok=1; break
+              fi
+              sleep 10
+            done
+            [ "$ok" = "1" ] || echo "::error::Gitee 附件上传失败：$f"
+          done
+
+          FINAL=$(curl -sS "$BASE/$REL_ID/attach_files?access_token=$GITEE_TOKEN" | jq -r '.[].name' 2>/dev/null || true)
+          echo "Gitee 附件列表：$FINAL"
+          echo "$FINAL" | grep -qx "$APK" || echo "::error::Gitee 缺少 APK 附件"
+          echo "$FINAL" | grep -qx "$APK.sha256" || echo "::error::Gitee 缺少校验附件"
