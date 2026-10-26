@@ -23,10 +23,14 @@ fun DeviceDetailDialog(
     isBoundWasher: Boolean = false,
     /** 没绑过这台、但两个绑定名额都满了：绑定按钮换成满员说明 */
     bindFull: Boolean = false,
+    /** 这台是「我的热水器」（绑定寝室后自动检测/手动设定） */
+    isBoundHeater: Boolean = false,
     onDismiss: () -> Unit,
     onConfirm: () -> Unit,
     onBindWasher: (() -> Unit)? = null,
-    onUnbindWasher: (() -> Unit)? = null
+    onUnbindWasher: (() -> Unit)? = null,
+    onBindHeater: (() -> Unit)? = null,
+    onUnbindHeater: (() -> Unit)? = null
 ) {
     if (device == null) return
 
@@ -100,6 +104,25 @@ fun DeviceDetailDialog(
                         )
                         onBindWasher != null -> TextButton(onClick = { onBindWasher() }) {
                             Text("绑定为我的洗衣机", fontSize = 13.sp)
+                        }
+                    }
+                }
+                if (device.isShowerHeater) {
+                    Spacer(Modifier.height(10.dp))
+                    Text(
+                        "绑定寝室后，扫描到同寝室的这台热水器会自动记为「我的热水器」，" +
+                            "首页常驻显示空闲/使用状态（状态只看服务端，没有剩余秒就不猜）。",
+                        fontSize = 13.sp,
+                        color = AppColors.TextSecondary,
+                        lineHeight = 18.sp
+                    )
+                    Spacer(Modifier.height(2.dp))
+                    when {
+                        isBoundHeater -> TextButton(onClick = { onUnbindHeater?.invoke() }) {
+                            Text("已检测为我的热水器 · 解除绑定", fontSize = 13.sp)
+                        }
+                        onBindHeater != null -> TextButton(onClick = { onBindHeater() }) {
+                            Text("设为我的热水器", fontSize = 13.sp)
                         }
                     }
                 }

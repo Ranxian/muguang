@@ -72,6 +72,20 @@ data class DeviceInfo(
 
     val isLaundry: Boolean get() = isWasher
 
+    /**
+     * 是否是寝室里的**淋浴热水器**（`热水器-…` / `热水表-…` / `热水变-…`）。
+     *
+     * 「我的热水器」自动检测的判据。排除法和 [isDrinkingWater] 的正向判据原则一致：
+     * 洗衣机、饮水机、洗手台各有自己的绑定/展示路径，不参与热水器检测；
+     * 剩下的「无类型词可归」的水路设备（kind = OTHER）就是淋浴用的那台。
+     *
+     * ⚠️ 洗手台必须排除——它也叫「热水器」（`洗手台热水器`），
+     * 但它管的是洗漱，和洗澡用的淋浴热水器是两个出水点，
+     * 混进检测会让「我的热水器」随机绑到洗手台那台。
+     */
+    val isShowerHeater: Boolean get() =
+        !isDrinkingWater && !isWasher && !deviceName.startsWith("洗手台")
+
     val displayName: String get() = formatDeviceName(deviceName)
     val locationOnly: String get() = displayName
 

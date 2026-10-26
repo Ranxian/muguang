@@ -105,7 +105,8 @@ object PrefsHelper {
         val bases = listOf(
             "lastDeviceProjectId", "lastDeviceName", "lastDeviceRawName", "lastDeviceMac",
             "lastDeviceSnCode", "lastDeviceEmoji", "lastDeviceTypeName", "lastDeviceWithholdMoney",
-            "boundRoom", "bleSessionJson", "washerSessionJson", "boundWasherJson", "boundWashersJson", "widgetNearbyJson",
+            "boundRoom", "bleSessionJson", "washerSessionJson", "boundWasherJson", "boundWashersJson",
+            "boundHeaterJson", "boundHeaterDismissedSn", "widgetNearbyJson",
             "widgetNearbyTime", "widgetBillJson", "widgetBillTime", "lastConsumeTime"
         )
         bases.forEach { base ->
@@ -422,6 +423,26 @@ object PrefsHelper {
      */
     var boundWashersJson: String get() = prefs.getString(projectScopedKey("boundWashersJson"), "") ?: ""
         set(v) = prefs.edit().putString(projectScopedKey("boundWashersJson"), v).apply()
+
+    /**
+     * 「我的热水器」（单个 `DeviceInfo` 的 JSON）。
+     *
+     * 与洗衣机不同，热水器是**自动检测**的：绑定寝室后扫描到同寝室的那台就记在这里，
+     * 一间寝室一台。同样 project-scoped——换学校就是换一台机器。
+     */
+    var boundHeaterJson: String get() = prefs.getString(projectScopedKey("boundHeaterJson"), "") ?: ""
+        set(v) = prefs.edit().putString(projectScopedKey("boundHeaterJson"), v).apply()
+
+    /**
+     * 用户手动「解除绑定」掉的热水器 snCode（project-scoped）。
+     *
+     * 热水器是**扫描自动检测**的：没有这个标记，解绑只是把记录删掉，
+     * 下一轮扫描立刻又认领回来——用户点了解除却越解越有，像按钮坏了。
+     * 换绑寝室或手动重新绑定同一台时清空。
+     */
+    var boundHeaterDismissedSn: String
+        get() = prefs.getString(projectScopedKey("boundHeaterDismissedSn"), "") ?: ""
+        set(v) = prefs.edit().putString(projectScopedKey("boundHeaterDismissedSn"), v).apply()
 
     /**
      * 通知里「结束使用」按钮的 `PendingIntent` requestCode（按 snCode **稳定分配**）。

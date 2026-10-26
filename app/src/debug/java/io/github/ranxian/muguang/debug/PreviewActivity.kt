@@ -29,6 +29,7 @@ import io.github.ranxian.muguang.ui.ShowerScreen
 import io.github.ranxian.muguang.ui.UserScreen
 import io.github.ranxian.muguang.ui.WalletScreen
 import io.github.ranxian.muguang.ui.WasherScreen
+import io.github.ranxian.muguang.data.BoundHeaterState
 import io.github.ranxian.muguang.data.BoundWasherView
 import io.github.ranxian.muguang.ui.design.StylePacks
 import io.github.ranxian.muguang.ui.design.StyleId
@@ -139,8 +140,15 @@ io.github.ranxian.muguang.ui.theme.CircularRevealThemeHost(
         // 把「剩余 21:35」翻成「未能获取设备状态」
         vm.previewFreezeBoundRefresh = true
         // --ei washers 0/1/2：灌几台绑定洗衣机，验收未绑定/单机/双机三档形态
-        if (!PrefsHelper.isLoggedIn) {
-            fillFakeState(vm, intent.getIntExtra("washers", 2).coerceIn(0, 2))
+        // 已登录时默认渲染真实数据；--ez seed true 强制灌假数据，
+        // 让三态/多台形态的截图验收在登录态下也可复现
+        if (!PrefsHelper.isLoggedIn || intent.getBooleanExtra("seed", false)) {
+            fillFakeState(
+                vm,
+                intent.getIntExtra("washers", 2).coerceIn(0, 2),
+                // --ei heater 0/1/2/3：无 / 空闲 / 他人使用中 / 我的订单使用中
+                intent.getIntExtra("heater", 0).coerceIn(0, 3)
+            )
         }
         var tab by remember { mutableIntStateOf(startTab) }
         Box(Modifier.fillMaxSize()) {
@@ -201,8 +209,10 @@ io.github.ranxian.muguang.ui.theme.CircularRevealThemeHost(
     /**
      * @param washers 灌几台绑定洗衣机（0/1/2）——用 `--ei washers n` 切换，
      * 三档（未绑定 / 单机 / 双机）的首页卡片和抽屉分区形态都能单独验收
+     * @param heater 假热水器状态（0 无 / 1 空闲 / 2 他人使用中 / 3 我的订单使用中），
+     * `--ei heater n` 切换；自动检测无法在预览里真实发生，这里直接种状态
      */
-    private fun fillFakeState(vm: MainViewModel, washers: Int) {
+    private fun fillFakeState(vm: MainViewModel, washers: Int, heater: Int = 0) {
         // ⚠️ 仅在未登录时调用（调用方已守卫）
         vm.phone = "13800000000"
         // 双机绑定形态：一台在跑（倒计时）、一台空闲，
@@ -246,6 +256,12 @@ io.github.ranxian.muguang.ui.theme.CircularRevealThemeHost(
                 mapOf(washerA.snCode to now, washerB.snCode to now)
             )
         }
+        // 热水器三态：0 不种（卡片里没有热水器行）；1 空闲；2 他人；3 我的单
+        when (heater) {
+            1 -> vm.previewSetBoundHeater(demoHeater(), BoundHeaterState.fromQuery(false, null))
+            2 -> vm.previewSetBoundHeater(demoHeater(), BoundHeaterState.fromQuery(true, false))
+            3 -> vm.previewSetBoundHeater(demoHeater(), BoundHeaterState.fromQuery(true, true))
+        }
         // 附近设备列表：名字必须能通过寝室筛选（matchesBoundRoom），否则全被滤掉
         vm.nearbyDevices.addAll(
             listOf(
@@ -266,5 +282,16 @@ io.github.ranxian.muguang.ui.theme.CircularRevealThemeHost(
         onlineStatusId = 1,
         bigTypeId = 6,
         bigTypeName = "洗衣机",
+    )
+
+    private fun demoHeater() = DeviceInfo(
+        deviceId = 2,
+        deviceName = "热水器-龙川北苑-3号楼南-3层-320",
+        snCode = "SN20241024000009",
+        macAddress = "AA:BB:CC:DD:EE:09",
+        withholdMoney = 3.0,
+        onlineStatusId = 1,
+        bigTypeId = 1,
+        bigTypeName = "热水器",
     )
 }

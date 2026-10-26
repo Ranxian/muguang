@@ -27,6 +27,9 @@ import io.github.ranxian.muguang.api.getWalletSafe
 import io.github.ranxian.muguang.api.queryUsingSafe
 import io.github.ranxian.muguang.data.BalanceEstimator
 import io.github.ranxian.muguang.data.ActiveOrderRepository
+import io.github.ranxian.muguang.data.BoundHeaterState
+import io.github.ranxian.muguang.data.BoundHeaterStore
+import io.github.ranxian.muguang.data.BoundHeaterView
 import io.github.ranxian.muguang.data.BoundWasherState
 import io.github.ranxian.muguang.data.BoundWasherStore
 import io.github.ranxian.muguang.data.BoundWasherView
@@ -301,6 +304,18 @@ class MainViewModel : ViewModel() {
     val canBindMoreWashers: Boolean
         get() = boundWashers.size < BoundWasherStore.MAX_BINDINGS
 
+    // ── 我的热水器（绑定寝室后自动检测，一间寝室一台） ──
+    // 与洗衣机不同，不设手动名额、也不必点绑定：同寝室的淋浴热水器在扫描结果里
+    // 出现就认领（见 detectBoundHeater）。状态只有一路数据源 queryUsing——
+    // 有单/无单 + isOwner，服务端没给剩余秒就不猜（见 BoundHeaterState）。
+    var boundHeater by mutableStateOf<DeviceInfo?>(null)
+        private set
+    /** 热水器状态投影；null = 还没查过 */
+    var boundHeaterView by mutableStateOf<BoundHeaterView?>(null)
+        private set
+    var boundHeaterRefreshing by mutableStateOf(false)
+        private set
+
     private var washerPollJob: Job? = null
 
     /**
@@ -379,6 +394,7 @@ class MainViewModel : ViewModel() {
     init {
         restoreProjectWasherSession()
         restoreBoundWasher()
+        restoreBoundHeater()
         // 让小组件服务知道「App 还活着、可能握着 BLE 连接」（见 BleArbiter）
         BleArbiter.appAlive = true
         viewModelScope.launch {
@@ -656,6 +672,124 @@ class MainViewModel : ViewModel() {
         if (restored.isNotEmpty()) refreshBoundWashers()
     }
 
+    // ── 我的热水器：检测 / 恢复 / 刷新 ──
+
+    fun isBoundHeater(snCode: String): Boolean =
+        snCode.isNotBlank() && boundHeater?.snCode == snCode
+
+    /** 手动绑定，自动检测漏掉时的兜底（设备命名不在常见前缀里，或没进过扫描结果） */
+    fun bindHeater(device: DeviceInfo) {
+        if (!device.isShowerHeater || device.snCode.isBlank()) return
+        // 手动绑回同一台 = 撤销之前的「不再提醒」
+        PrefsHelper.boundHeaterDismissedSn = ""
+        boundHeater = device
+        boundHeaterView = BoundHeaterState.reading
+        saveBoundHeater()
+        refreshBoundHeater()
+    }
+
+    fun unbindHeater() {
+        val sn = boundHeater?.snCode
+        if (sn == null) return
+        // 记下「用户不要这台」：否则下一轮扫描的自动检测会把它绑回来
+        PrefsHelper.boundHeaterDismissedSn = sn
+        boundHeater = null
+        boundHeaterView = null
+        saveBoundHeater()
+    }
+
+    private fun saveBoundHeater() {
+        PrefsHelper.boundHeaterJson = BoundHeaterStore.toJson(boundHeater)
+    }
+
+    private fun restoreBoundHeater() {
+        val restored = BoundHeaterStore.parse(PrefsHelper.boundHeaterJson)
+            ?.takeIf { it.isShowerHeater && BoundHeaterStore.stillInRoom(PrefsHelper.boundRoom, it) }
+        boundHeater = restored
+        boundHeaterView = restored?.let { BoundHeaterState.reading }
+        if (restored != null) refreshBoundHeater()
+    }
+
+    /**
+     * 扫描结束后认领同寝室的淋浴热水器。
+     *
+     * 同一台设备被反复扫到时什么都不做——轮询（[refreshBoundHeater]）在跑，
+     * 不需要扫描来刷新状态。只有「还没绑」或「换了一台」才落盘。
+     */
+    private fun detectBoundHeater() {
+        val room = PrefsHelper.boundRoom
+        if (room.isBlank()) return
+        val found = nearbyDevices.asSequence()
+            .mapNotNull { it.deviceInfo }
+            .firstOrNull {
+                it.isShowerHeater && it.snCode.isNotBlank() &&
+                    DeviceInfo.inSameRoom(room, it.deviceName)
+            } ?: return
+        // 用户手动解除过这一台：别再自作主张绑回来（手动重绑或换寝室会清掉标记）
+        if (found.snCode == PrefsHelper.boundHeaterDismissedSn) return
+        if (boundHeater?.snCode == found.snCode) return
+        // 已有的热水器就在本寝室时不再换：公共澡堂一次能扫到一排，
+        // 按扫描顺序来回换绑只会让卡片上的名字闪
+        if (boundHeater?.let { DeviceInfo.inSameRoom(room, it.deviceName) } == true) return
+        boundHeater = found
+        boundHeaterView = BoundHeaterState.reading
+        saveBoundHeater()
+        refreshBoundHeater()
+    }
+
+    /** 寝室改绑后，旧热水器不在新寝室就丢掉；下次扫描会重新认领 */
+    private fun validateBoundHeaterRoom() {
+        // 换寝室 = 重新开始：之前「不要这台」的标记只对旧寝室有效
+        PrefsHelper.boundHeaterDismissedSn = ""
+        val heater = boundHeater ?: return
+        if (!BoundHeaterStore.stillInRoom(PrefsHelper.boundRoom, heater)) {
+            boundHeater = null
+            boundHeaterView = null
+            saveBoundHeater()
+        }
+    }
+
+    /**
+     * 查一次热水器状态。
+     *
+     * 三态是硬规矩（API 文档 4.5）：有单 / 无单 / **不确定**。
+     * 查询失败时写 [BoundHeaterState.failed]，绝不能落成「空闲」——
+     * 那等于替服务端担保这台机器能用。
+     */
+    fun refreshBoundHeater() {
+        if (previewFreezeBoundRefresh) return
+        val heater = boundHeater ?: return
+        if (boundHeaterRefreshing) return
+        boundHeaterRefreshing = true
+        val requestProject = NetworkModule.currentProjectId()
+        sessionScope().launch {
+            try {
+                val q = NetworkModule.apiService.queryUsingSafe(
+                    snCode = heater.snCode, auth = NetworkModule.authFields()
+                )
+                if (NetworkModule.currentProjectId() != requestProject) return@launch
+                val active = q.errorCode == 307 || (q.success && q.data?.orderNo != null)
+                boundHeaterView = when {
+                    active -> BoundHeaterState.fromQuery(true, q.data?.isOwner)
+                    q.success -> BoundHeaterState.fromQuery(false, null)
+                    else -> BoundHeaterState.failed
+                }
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                boundHeaterView = BoundHeaterState.failed
+                AppLogger.w("刷新我的热水器状态失败（${heater.snCode}）：${e.message}")
+            } finally {
+                boundHeaterRefreshing = false
+            }
+        }
+    }
+
+    fun previewSetBoundHeater(device: DeviceInfo, view: BoundHeaterView) {
+        boundHeater = device
+        boundHeaterView = view
+    }
+
     // ── 账单 ──
     var billList by mutableStateOf<List<BillItem>>(emptyList())
     var billHistory by mutableStateOf<List<BillItem>>(emptyList())
@@ -837,6 +971,7 @@ class MainViewModel : ViewModel() {
                         syncActiveOrdersFromPrefs()
                         restoreProjectWasherSession()
                         restoreBoundWasher()
+                        restoreBoundHeater()
                         refreshProjectRunningOrders()
                         startKickWatch()
                         projectRevision++
@@ -894,6 +1029,9 @@ class MainViewModel : ViewModel() {
         boundWasherRefreshing = false
         boundWasherUpdatedAtMs.clear()
         stopBoundWasherPoll()
+        boundHeater = null
+        boundHeaterView = null
+        boundHeaterRefreshing = false
         dismissWasherModes()
         ownerBySn.clear()
         showAutoCloseDialog = false
@@ -1082,6 +1220,8 @@ class MainViewModel : ViewModel() {
         nearbyDevices.addAll(sorted)
 
         cacheNearbyForWidget()
+        // 扫描结果里认领同寝室的淋浴热水器（自动检测，见 detectBoundHeater）
+        detectBoundHeater()
     }
 
     // ── 扫码绑定 ──
@@ -2473,6 +2613,8 @@ class MainViewModel : ViewModel() {
         PrefsHelper.boundRoom = v
         boundRoom = v
         onBoundRoomChanged()
+        // 改绑寝室后，旧寝室的热水器不再算「我的」；下次扫描到新寝室那台会重新认领
+        validateBoundHeaterRoom()
     }
 
     /** 当前是否有绑定寝室 */

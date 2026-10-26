@@ -1,0 +1,46 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  淋浴热水器（线稿版）。
+
+  和 ic_device_shower 的分工：
+  - ic_device_shower 是**填充插画**，只在 34dp 彩色头像块里用（附近设备列表），
+    缩到 26dp 直接压在卡片文字旁会糊成一团黑。
+  - 这个是**等宽线稿**（1.8dp 描边、圆头），16–30dp 都能读，
+    用于「我的设备」卡片和抽屉的行内图标，字重和两行文字协调。
+
+  罩体 / 三条出水口 / 三滴水，没有装饰线。
+-->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="24dp"
+    android:height="24dp"
+    android:viewportWidth="24"
+    android:viewportHeight="24">
+    <!-- 淋浴头罩（半圆顶） -->
+    <path
+        android:pathData="M5.5,10 A6.5,6.5 0 0 1 18.5,10"
+        android:strokeColor="#FF000000"
+        android:strokeWidth="1.8"
+        android:strokeLineCap="round"
+        android:fillColor="#00000000" />
+    <!-- 立管 -->
+    <path
+        android:pathData="M12,10 V3.5"
+        android:strokeColor="#FF000000"
+        android:strokeWidth="1.8"
+        android:strokeLineCap="round"
+        android:fillColor="#00000000" />
+    <!-- 出水口 -->
+    <path
+        android:pathData="M8.2,12.2 V14.2 M12,12.2 V14.2 M15.8,12.2 V14.2"
+        android:strokeColor="#FF000000"
+        android:strokeWidth="1.8"
+        android:strokeLineCap="round"
+        android:fillColor="#00000000" />
+    <!-- 水滴 -->
+    <path
+        android:pathData="M8.2,17 V18.2 M12,17 V19.4 M15.8,17 V18.2"
+        android:strokeColor="#FF000000"
+        android:strokeWidth="1.8"
+        android:strokeLineCap="round"
+        android:fillColor="#00000000" />
+</vector>

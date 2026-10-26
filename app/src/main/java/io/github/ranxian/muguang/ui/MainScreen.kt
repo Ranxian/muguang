@@ -56,6 +56,7 @@ import androidx.compose.ui.res.painterResource
 import io.github.ranxian.muguang.QrScanActivity
 import io.github.ranxian.muguang.R
 import io.github.ranxian.muguang.data.BalanceEstimator
+import io.github.ranxian.muguang.data.BoundHeaterView
 import io.github.ranxian.muguang.data.BoundWasherState
 import io.github.ranxian.muguang.data.BoundWasherView
 import io.github.ranxian.muguang.model.DeviceInfo
@@ -112,18 +113,18 @@ fun MainScreen(phone: String, viewModel: MainViewModel = viewModel()) {
         }
     }
 
-    // 绑定洗衣机的状态轮询：使用中 5 秒一次（剩余时间要准），空闲 15 秒一次。
-    // snCode 变化（换绑定/解绑）时 LaunchedEffect 自动取消旧循环。
-    // 刷新节奏跟着「有没有机器在跑」走：跑着 5 秒一轮（倒计时才走得动），
-    // 全空闲 15 秒一轮。绑定列表本身当 key：增删绑定会重启循环，顺序也稳定
-    LaunchedEffect(viewModel.boundWashers) {
-        if (viewModel.boundWashers.isEmpty()) return@LaunchedEffect
+    // 绑定设备（自动检测的热水器 + 绑定的洗衣机）的状态轮询：
+    // 有设备在跑 5 秒一次（洗衣机的剩余倒计时要靠它走），全空闲 15 秒一次。
+    // key 用设备集合：增删绑定 / 检测到新热水器都会重启循环
+    LaunchedEffect(viewModel.boundWashers, viewModel.boundHeater) {
+        if (viewModel.boundWashers.isEmpty() && viewModel.boundHeater == null) return@LaunchedEffect
         while (true) {
             viewModel.refreshBoundWashers()
-            delay(
-                if (viewModel.boundWashers.any { viewModel.boundWasherViews[it.snCode]?.isActive == true })
-                    5_000L else 15_000L
-            )
+            viewModel.refreshBoundHeater()
+            val anyActive = viewModel.boundWashers.any {
+                viewModel.boundWasherViews[it.snCode]?.isActive == true
+            } || viewModel.boundHeaterView?.isActive == true
+            delay(if (anyActive) 5_000L else 15_000L)
         }
     }
 
@@ -215,22 +216,29 @@ fun MainScreen(phone: String, viewModel: MainViewModel = viewModel()) {
     val cardInk = if (frostDark) Color(0xFFF5F5F7) else Color(0xFF1D1D1F)
     val cardInkSub = if (frostDark) Color(0xFFB9BDC5) else Color(0xFF4A4A4F)
     val useCustomBg = BackgroundState.config(BackgroundManager.SCOPE_HOME).enabled
-    // 余额卡底部那行洗衣机摘要：一台给状态，两台给「几台在用」的合计——
-    // 两台的名字和明细放「我的洗衣机」卡片，这一行只做一眼扫读
-    val washerStatusLine = when {
+    // 余额卡底部那行设备摘要：热水器（自动检测）+ 洗衣机合起来算。
+    // 一台给状态；多台给「几台在用」的合计——逐台明细在「我的设备」卡片，
+    // 这一行只做一眼扫读。状态没拿全时不断言「均空闲」。
+    val boundHeater = viewModel.boundHeater
+    val boundHeaterView = viewModel.boundHeaterView
+    val deviceTotal = viewModel.boundWashers.size + if (boundHeater != null) 1 else 0
+    val deviceStatusLine = when {
         viewModel.activeWasherSession != null -> "运行中 · ${viewModel.washerStageText.ifBlank { "进行中" }}"
-        viewModel.boundWashers.isEmpty() -> "未绑定"
-        viewModel.boundWashers.size == 1 ->
-            viewModel.boundWasherViews[viewModel.boundWashers.first().snCode]?.statusLabel ?: "状态未知"
+        deviceTotal == 0 -> "未绑定"
+        deviceTotal == 1 -> when {
+            boundHeater != null -> boundHeaterView?.statusLabel ?: "状态未知"
+            else -> viewModel.boundWasherViews[viewModel.boundWashers.first().snCode]?.statusLabel
+                ?: "状态未知"
+        }
         else -> {
             val activeCount = viewModel.boundWashers.count {
                 viewModel.boundWasherViews[it.snCode]?.isActive == true
-            }
+            } + if (boundHeaterView?.isActive == true) 1 else 0
             // 状态还没拿到就不说「均空闲」——那等于替服务端担保机器能用
             val allKnown = viewModel.boundWashers.all {
                 viewModel.boundWasherViews[it.snCode]?.known == true
-            }
-            "${viewModel.boundWashers.size} 台" + when {
+            } && (boundHeater == null || boundHeaterView?.known == true)
+            "$deviceTotal 台" + when {
                 activeCount > 0 -> " · $activeCount 台使用中"
                 allKnown -> " · 均空闲"
                 else -> ""
@@ -398,17 +406,19 @@ fun MainScreen(phone: String, viewModel: MainViewModel = viewModel()) {
                                 Modifier.fillMaxWidth(),
                                 horizontalArrangement = Arrangement.SpaceBetween
                             ) {
-                                Text("洗衣机 · $washerStatusLine", fontSize = 11.sp, fontFamily = homeBody, color = cardInkSub)
+                                Text("设备 · $deviceStatusLine", fontSize = 11.sp, fontFamily = homeBody, color = cardInkSub)
                                 Text("进行中订单 ${viewModel.activeOrders.size}", fontSize = 11.sp, fontFamily = homeBody, color = cardInkSub)
                             }
                         }
                     }
-                    // ── 我的洗衣机卡片：绑定几台显示几行（最多两台）──
-                    // 和余额卡同一套白霜玻璃材质；每行点开对应的设备详情，
+                    // ── 我的设备卡片：热水器（自动检测）+ 绑定的洗衣机，一台一行 ──
+                    // 和余额卡同一套霜玻璃材质；每行点开对应的设备详情，
                     // 绑定/解绑都在详情弹窗里，这张卡不另设按钮
-                    if (viewModel.boundWashers.isNotEmpty()) {
+                    if (viewModel.boundWashers.isNotEmpty() || boundHeater != null) {
                         Spacer(Modifier.height(10.dp))
-                        P1WasherCard(
+                        P1BoundDevicesCard(
+                            heater = boundHeater,
+                            heaterView = boundHeaterView,
                             devices = viewModel.boundWashers,
                             viewFor = { sn -> viewModel.boundWasherViews[sn] },
                             updatedFor = { sn -> viewModel.boundWasherUpdatedAtMs[sn] ?: 0L },
@@ -486,6 +496,7 @@ fun MainScreen(phone: String, viewModel: MainViewModel = viewModel()) {
         val isActive = viewModel.selectedDevice?.snCode?.let { viewModel.isDeviceActive(it) } ?: false
         val selected = viewModel.selectedDevice
         val selectedBound = selected?.snCode?.let { viewModel.isBoundWasher(it) } ?: false
+        val selectedBoundHeater = selected?.snCode?.let { viewModel.isBoundHeater(it) } ?: false
         DeviceDetailDialog(
             selected,
             isActive,
@@ -493,10 +504,13 @@ fun MainScreen(phone: String, viewModel: MainViewModel = viewModel()) {
             isBoundWasher = selectedBound,
             // 只有「没绑过这台 且 两个名额都满了」才需要提示满员；已绑定的那台要能解绑
             bindFull = !selectedBound && !viewModel.canBindMoreWashers,
+            isBoundHeater = selectedBoundHeater,
             onDismiss = { viewModel.showDeviceDetail = false },
             onConfirm = { viewModel.startShower(phone) },
             onBindWasher = { viewModel.selectedDevice?.let { viewModel.bindWasher(it) } },
-            onUnbindWasher = { viewModel.selectedDevice?.let { viewModel.unbindWasher(it) } }
+            onUnbindWasher = { viewModel.selectedDevice?.let { viewModel.unbindWasher(it) } },
+            onBindHeater = { viewModel.selectedDevice?.let { viewModel.bindHeater(it) } },
+            onUnbindHeater = { viewModel.unbindHeater() }
         )
     }
 
@@ -989,33 +1003,31 @@ private fun P1HomeDrawer(
                     Text("趣智校园余额", fontSize = 12.sp, fontFamily = homeBody, color = sheetInkSecondary)
                     Text(balanceText, fontSize = 12.sp, fontWeight = FontWeight.SemiBold, color = sheetInk)
                 }
-                // 「我的设备」区：meta 汇总行 + 绑了两台时每台再列一行。
-                // 汇总行只在未绑定时是入口（点按去扫码）；绑一台时点按直接开那台
-                // （单机用户的行为不变）；两台时汇总行退化为说明，逐台的入口
-                // 是下面那两行——两台都得一键点得到，不能只开「正在跑的那台」
+                // 「我的设备」区：meta 汇总行 + 逐台行（热水器 + 最多两台洗衣机）。
+                // 汇总行只在未绑定时是入口（点按去扫码）；只绑一台时点按直接开那台；
+                // 多台时汇总行退化为说明，逐台入口在下面各行——
+                // 每台都得一键点得到，不能只开「正在跑的那台」
+                val heaterDevice = viewModel.boundHeater
+                val heaterDeviceView = viewModel.boundHeaterView
                 val washerBoundList = viewModel.boundWashers
+                val deviceCount = washerBoundList.size + if (heaterDevice != null) 1 else 0
                 Row(
                     Modifier
                         .fillMaxWidth()
                         .heightIn(min = 48.dp)
                         .clickable(
-                            enabled = washerBoundList.size <= 1 ||
+                            enabled = deviceCount <= 1 ||
                                 viewModel.activeWasherSession != null
                         ) {
-                            if (viewModel.activeWasherSession != null || washerBoundList.isEmpty()) {
-                                // 正在跑：打开在跑的那台；没绑定：去扫码
-                                val target = viewModel.activeWasherSession?.device
-                                    ?: washerBoundList.firstOrNull()
-                                if (target != null) {
-                                    viewModel.selectedDevice = target
-                                    viewModel.showDeviceDetail = true
-                                } else {
-                                    onScanQr()
-                                }
-                            } else {
-                                // 单台：直接开它
-                                viewModel.selectedDevice = washerBoundList.first()
+                            // 正在跑：优先打开在跑的那台；否则开唯一的设备；都没有就去扫码
+                            val target = viewModel.activeWasherSession?.device
+                                ?: heaterDevice
+                                ?: washerBoundList.firstOrNull()
+                            if (target != null) {
+                                viewModel.selectedDevice = target
                                 viewModel.showDeviceDetail = true
+                            } else {
+                                onScanQr()
                             }
                         }
                         .padding(horizontal = 22.dp, vertical = 8.dp),
@@ -1031,17 +1043,18 @@ private fun P1HomeDrawer(
                     Text(
                         when {
                             viewModel.activeWasherSession != null -> "使用中 · ${viewModel.washerStageText.ifBlank { "运行中" }}"
-                            washerBoundList.isEmpty() -> "未绑定 · 点按绑定"
-                            washerBoundList.size == 1 -> washerBoundList.first().deviceName
+                            deviceCount == 0 -> "未绑定 · 点按绑定"
+                            deviceCount == 1 -> heaterDevice?.deviceName
+                                ?: washerBoundList.first().deviceName
                             else -> {
                                 val activeCount = washerBoundList.count {
                                     viewModel.boundWasherViews[it.snCode]?.isActive == true
-                                }
+                                } + if (heaterDeviceView?.isActive == true) 1 else 0
                                 // 与余额卡摘要同一规矩：状态未知时不断言「均空闲」
                                 val allKnown = washerBoundList.all {
                                     viewModel.boundWasherViews[it.snCode]?.known == true
-                                }
-                                "已绑 ${washerBoundList.size} 台" + when {
+                                } && (heaterDevice == null || heaterDeviceView?.known == true)
+                                "已绑 $deviceCount 台" + when {
                                     activeCount > 0 -> " · $activeCount 台使用中"
                                     allKnown -> " · 均空闲"
                                     else -> ""
@@ -1051,13 +1064,54 @@ private fun P1HomeDrawer(
                         fontSize = 12.sp,
                         fontWeight = FontWeight.SemiBold,
                         fontFamily = homeBody,
-                        color = if (washerBoundList.isEmpty()) sheetLink else sheetInk
+                        color = if (deviceCount == 0) sheetLink else sheetInk
                     )
                 }
-                // 双机时的逐台行：与下方「附近设备」同一套列表语法（图标 + 名称/状态 + ›），
-                // 状态小字复用首页卡片同一分档（剩余/约剩/下单时刻），两个入口说法一致
-                if (washerBoundList.size > 1) {
+                // 多台时的逐台行：热水器在前、洗衣机在后，同一套列表语法。
+                // 洗衣机状态小字复用首页卡片同一分档，两个入口说法一致
+                if (deviceCount > 1) {
                     val drawerNowMs = System.currentTimeMillis()
+                    if (heaterDevice != null) {
+                        Row(
+                            Modifier
+                                .fillMaxWidth()
+                                .heightIn(min = 44.dp)
+                                .clickable {
+                                    viewModel.selectedDevice = heaterDevice
+                                    viewModel.showDeviceDetail = true
+                                }
+                                .padding(start = 30.dp, top = 6.dp, end = 22.dp, bottom = 6.dp),
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Icon(
+                                painter = painterResource(R.drawable.ic_shower_line),
+                                contentDescription = null,
+                                tint = sheetInkSecondary,
+                                modifier = Modifier.size(26.dp)
+                            )
+                            Spacer(Modifier.width(12.dp))
+                            Column(Modifier.weight(1f)) {
+                                Text(
+                                    heaterDevice.displayName,
+                                    fontSize = 13.sp,
+                                    fontWeight = FontWeight.SemiBold,
+                                    fontFamily = homeBody,
+                                    color = sheetInk,
+                                    maxLines = 1,
+                                    overflow = TextOverflow.Ellipsis
+                                )
+                                Text(
+                                    heaterDeviceView?.statusLabel ?: "读取中…",
+                                    fontSize = 11.sp,
+                                    fontFamily = homeBody,
+                                    color = sheetInkSecondary,
+                                    maxLines = 1,
+                                    overflow = TextOverflow.Ellipsis
+                                )
+                            }
+                            Text("›", fontSize = 15.sp, color = sheetChevron)
+                        }
+                    }
                     washerBoundList.forEach { device ->
                         val view = viewModel.boundWasherViews[device.snCode]
                         Row(
@@ -1196,17 +1250,21 @@ private fun P1HomeDrawer(
 }
 
 /**
- * 首页「我的洗衣机」卡片：绑定几台显示几行（最多两台）。
+ * 首页「我的设备」卡片：自动检测的热水器一行 + 绑定的洗衣机逐行（最多两台）。
  *
- * 材质与余额卡同一套白霜玻璃（0.72 白 + 0.55 白描边 + 20dp 圆角），
- * 让两张卡读成同一组「资产」而不是两个孤岛；行内是「图标 + 名称/状态 + ›」
- * 的列表语法，和抽屉里的设备行一致，用户不用学第二种读法。
+ * 热水器不设绑定入口——绑定寝室后扫描到同寝室那台会自动认领（见
+ * `MainViewModel.detectBoundHeater`）；洗衣机仍是手动绑定。两者共用一行
+ * 「图标 + 名称/状态 + ›」的列表语法，用户不用学第二种读法。
  *
- * 状态在两次服务端刷新之间用本地倒数续走：卡片层每秒跳一次时钟，
- * 每行用 [BoundWasherState.cardSubline] 现算文案（含「剩余/约剩/HH:mm 下单」的分档）。
+ * 材质与余额卡同一套霜玻璃（0.72 白 + 0.55 白描边 + 20dp 圆角）。
+ * 洗衣机的状态在两次服务端刷新之间用本地倒数续走：卡片层每秒跳一次时钟，
+ * 每行用 [BoundWasherState.cardSubline] 现算文案；热水器只展示服务端事实
+ * （空闲 / 使用中 · 他人订单 / 使用中 · 我的订单），没有剩余秒就不编。
  */
 @Composable
-private fun P1WasherCard(
+private fun P1BoundDevicesCard(
+    heater: DeviceInfo?,
+    heaterView: BoundHeaterView?,
     devices: List<DeviceInfo>,
     viewFor: (String) -> BoundWasherView?,
     updatedFor: (String) -> Long,
@@ -1215,6 +1273,7 @@ private fun P1WasherCard(
     homeBody: FontFamily,
     onOpenDevice: (DeviceInfo) -> Unit
 ) {
+    val total = devices.size + if (heater != null) 1 else 0
     var nowMs by remember { mutableStateOf(System.currentTimeMillis()) }
     LaunchedEffect(Unit) {
         while (true) {
@@ -1243,14 +1302,60 @@ private fun P1WasherCard(
                 )
                 Spacer(Modifier.width(6.dp))
                 Text(
-                    "我的洗衣机 · ${devices.size} 台",
+                    "我的设备 · $total 台",
                     fontSize = 10.sp,
                     fontFamily = homeBody,
                     color = cardInkSub
                 )
             }
+            // 热水器行：矢量花洒图标 + 服务端状态（空闲/使用中·他人/使用中·我的）。
+            // 没有剩余秒数可给——queryUsing 不返回剩余时间，就不编倒计时
+            if (heater != null) {
+                Row(
+                    Modifier
+                        .fillMaxWidth()
+                        .heightIn(min = 48.dp)
+                        .clickable { onOpenDevice(heater) }
+                        .padding(vertical = 8.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    // 线稿花洒（ic_shower_line）：填充插画版缩到行内尺寸会糊成一团黑，
+                    // 线稿在 28dp 和右侧两行文字的灰度/粗细都合得上
+                    Icon(
+                        painter = painterResource(R.drawable.ic_shower_line),
+                        contentDescription = null,
+                        tint = cardInk,
+                        modifier = Modifier.size(28.dp)
+                    )
+                    Spacer(Modifier.width(12.dp))
+                    Column(Modifier.weight(1f)) {
+                        Text(
+                            heater.displayName,
+                            fontSize = 13.sp,
+                            fontWeight = FontWeight.SemiBold,
+                            fontFamily = homeBody,
+                            color = cardInk,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis
+                        )
+                        Text(
+                            heaterView?.statusLabel ?: "读取中…",
+                            fontSize = 11.sp,
+                            fontFamily = homeBody,
+                            color = cardInkSub,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis
+                        )
+                    }
+                    Text(
+                        "›",
+                        fontSize = 16.sp,
+                        color = if (frostDark) Color(0x80F5F5F7) else Color(0x661D1D1F)
+                    )
+                }
+            }
             devices.forEachIndexed { index, device ->
-                if (index > 0) {
+                if (index > 0 || heater != null) {
                     Box(
                         Modifier
                             .fillMaxWidth()
