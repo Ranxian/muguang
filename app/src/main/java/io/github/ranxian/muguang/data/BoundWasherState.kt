@@ -40,7 +40,13 @@ data class BoundWasherView(
      */
     val remainingIsEstimate: Boolean = false,
     /** 对方下单时刻（服务器时间 ms）。0 = 未知。别人的单展示「HH:mm 下单 · 已过 …」 */
-    val orderPlacedAtMs: Long = 0L
+    val orderPlacedAtMs: Long = 0L,
+    /**
+     * 正在用的模式名（标准洗 / 快洗 /…）。
+     * 来源：`washer/status.modelName`（服务端对 307+他人订单也可能下发）→
+     * `lastOrder.typeName`。空 = 两个源都没给。
+     */
+    val modeName: String = ""
 )
 
 /** 剩余秒 + 这个数是不是估算 */
@@ -100,6 +106,13 @@ object BoundWasherState {
             else -> "使用中"
         }
 
+        // 正在用的模式名：本机视角的 modelName 优先，设备视角的 typeName 兜底
+        val modeName = if (!active) "" else
+            status?.modelName?.takeIf { it.isNotBlank() }
+                ?: lastOrder?.typeName?.takeIf { it.isNotBlank() }
+                ?: ""
+
+
         val remaining = if (!active) Remaining(0, false) else remainingDetail(
             status = status,
             lastOrder = lastOrder,
@@ -112,13 +125,14 @@ object BoundWasherState {
         )
 
         // 服务端的 stageText 兜底是「设备运行中」——那是对「真在跑」的兜底；
-        // 空闲设备显示这句会误导，这里换成中性文案
+        // 空闲设备显示这句会误导，这里换成中性文案。
+        // 模式名已在 modeName 单独展示时，typeName 兜底的阶段文案会重复（「快洗 · 快洗」）
         val stage = when {
             !active -> "等待使用"
             statusActive && status != null ->
-                status.stageText.takeIf { it.isNotBlank() } ?: "设备运行中"
+                status.stageText.takeIf { it.isNotBlank() && it != modeName } ?: "设备运行中"
             orderActive && lastOrder != null ->
-                lastOrder.stageText.takeIf { it.isNotBlank() } ?: "设备运行中"
+                lastOrder.stageText.takeIf { it.isNotBlank() && it != modeName } ?: "设备运行中"
             else -> "设备运行中"
         }
 
@@ -130,7 +144,8 @@ object BoundWasherState {
             isOwner = owner,
             known = true,
             remainingIsEstimate = remaining.estimated,
-            orderPlacedAtMs = if (active) lastOrder?.startAtMs ?: 0L else 0L
+            orderPlacedAtMs = if (active) lastOrder?.startAtMs ?: 0L else 0L,
+            modeName = modeName
         )
     }
 
@@ -256,16 +271,21 @@ object BoundWasherState {
      * 5. 自己的单但只剩估算 → 「约剩 12:05」，标「约」
      * 6. 都没有 → 阶段文案兜底
      */
-    fun cardSubline(view: BoundWasherView, updatedAtMs: Long, nowMs: Long): String = when {
-        !view.known -> "未能获取设备状态"
-        !view.isActive -> "空闲"
-        view.remainingSec > 0 && !view.remainingIsEstimate ->
-            "剩余 " + paddedClock(countdown(view.remainingSec, updatedAtMs, nowMs))
-        !view.isOwner && view.orderPlacedAtMs > 0 ->
-            formatHourMinute(view.orderPlacedAtMs) + " 下单"
-        view.remainingSec > 0 ->
-            "约剩 " + paddedClock(countdown(view.remainingSec, updatedAtMs, nowMs))
-        else -> view.stageText.ifBlank { "运行中" }
+    fun cardSubline(view: BoundWasherView, updatedAtMs: Long, nowMs: Long): String {
+        if (!view.known) return "未能获取设备状态"
+        if (!view.isActive) return "空闲"
+        // 模式名放最前：用户最想知道「对面在用什么洗」
+        val mode = view.modeName.takeIf { it.isNotBlank() }
+        val tail = when {
+            view.remainingSec > 0 && !view.remainingIsEstimate ->
+                "剩余 " + paddedClock(countdown(view.remainingSec, updatedAtMs, nowMs))
+            !view.isOwner && view.orderPlacedAtMs > 0 ->
+                formatHourMinute(view.orderPlacedAtMs) + " 下单"
+            view.remainingSec > 0 ->
+                "约剩 " + paddedClock(countdown(view.remainingSec, updatedAtMs, nowMs))
+            else -> view.stageText.ifBlank { "运行中" }
+        }
+        return listOfNotNull(mode, tail).joinToString(" · ")
     }
 
     /**

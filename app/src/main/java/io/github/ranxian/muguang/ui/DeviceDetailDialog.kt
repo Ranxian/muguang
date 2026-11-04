@@ -25,6 +25,8 @@ fun DeviceDetailDialog(
     bindFull: Boolean = false,
     /** 这台是「我的热水器」（绑定寝室后自动检测/手动设定） */
     isBoundHeater: Boolean = false,
+    /** 洗衣机正在用的模式名（来自 washer/status.modelName 或 lastOrder.typeName）；空 = 未知 */
+    washerModeName: String? = null,
     onDismiss: () -> Unit,
     onConfirm: () -> Unit,
     onBindWasher: (() -> Unit)? = null,
@@ -79,6 +81,10 @@ fun DeviceDetailDialog(
                 DetailRow("MAC 地址", device.macAddress)
                 DetailRow("预扣金额", MoneyFormat.withSymbol(device.withholdMoney))
                 DetailRow("状态", if (isActive) "使用中" else "空闲")
+                // 对面在用什么模式：washer/status(307+他人订单).modelName 或 lastOrder.typeName
+                if (device.isWasher && !washerModeName.isNullOrBlank()) {
+                    DetailRow("运行模式", washerModeName)
+                }
                 if (device.isLaundry) {
                     Spacer(Modifier.height(10.dp))
                     Text(

@@ -231,6 +231,7 @@ io.github.ranxian.muguang.ui.theme.CircularRevealThemeHost(
             isActive = true,
             isOwner = true,
             known = true,
+            modeName = "标准洗",
         )
         val othersView = BoundWasherView(
             statusLabel = "他人使用中",
@@ -241,6 +242,7 @@ io.github.ranxian.muguang.ui.theme.CircularRevealThemeHost(
             known = true,
             remainingIsEstimate = true,
             orderPlacedAtMs = now - 6 * 60_000L,
+            modeName = "快洗",
         )
         // 0 → 空（卡片整张不渲染）；1 → 只有在跑那台；2 → 双机
         when (washers) {

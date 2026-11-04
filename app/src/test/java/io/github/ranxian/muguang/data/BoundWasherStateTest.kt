@@ -19,8 +19,11 @@ class BoundWasherStateTest {
         assertTrue(view.isActive)
         assertTrue(view.isOwner)
         assertEquals("使用中", view.statusLabel)
-        assertEquals("标准洗", view.stageText)
+        // 模式名进了 modeName 字段（subline 渲染「标准洗 · 剩余 …」），stageText 不再重复它
+        assertEquals("标准洗", view.modeName)
+        assertEquals("设备运行中", view.stageText)
         assertEquals(605, view.remainingSec)
+        assertEquals("标准洗 · 剩余 10:05", BoundWasherState.cardSubline(view, 0, 0))
     }
 
     @Test
@@ -186,24 +189,59 @@ class BoundWasherStateTest {
     }
 
     @Test
-    fun `stale order past its duration drops back to idle`() {
-        // 脏单：状态还是 0，但模式时长早就走完了（超过 5 分钟宽限）
-        val startedMs = 4_000_000L
+    fun `queued order past its nominal duration stays running`() {
+        // 回归用户实测 bug：consumeDate 是**下单**时间，排队的单真正上水比它晚得多。
+        // 「排队 40 分钟 + 洗 45 分钟」时 elapsed 早已超过 modeTime+旧宽限，
+        // 旧逻辑判成已结束 → 卡片显示「空闲」，明明在洗。服务端 liquidOrderStatus==0
+        // 是运行中的权威说法（官方 w7()：0=运行中 / 1=已完成），客户端只做展示。
+        val placedMs = 4_000_000L
         val lastOrder = OrderLastBean(
-            consumeDate = format(startedMs),
+            consumeDate = format(placedMs),
             liquidOrderNo = "L3",
             liquidOrderStatus = 0,
             modeTime = 600
         )
+        // 下单后 40 分钟（旧逻辑这里必然判死），设备正在洗
+        val nowMs = placedMs + 40 * 60 * 1000L
         val view = BoundWasherState.from(
             status = null,
             lastOrder = lastOrder,
             sessionStartedAtMs = null,
-            nowMs = startedMs + (600 + OrderLastBean.STALE_GRACE_SEC + 1) * 1000L,
+            nowMs = nowMs,
             failed = false
         )
-        assertFalse(view.isActive)
-        assertEquals("空闲", view.statusLabel)
+        assertTrue(view.isActive)
+        assertEquals("使用中", view.statusLabel)
+        // 排队场景的剩余估算是负数被夹成 0 → 显示回退到阶段文案
+        assertEquals(0, view.remainingSec)
+    }
+
+    @Test
+    fun `mode name prefers status then falls back to lastOrder`() {
+        val placedMs = 6_000_000L
+        val lastOrder = OrderLastBean(
+            consumeDate = format(placedMs),
+            liquidOrderNo = "L5",
+            liquidOrderStatus = 0,
+            modeTime = 1800,
+            typeName = "快洗"
+        )
+        // status 没给 modelName（学校对他人订单回空壳）→ 用设备视角的 typeName
+        val fromOrder = BoundWasherState.from(
+            status = null, lastOrder = lastOrder, nowMs = placedMs + 60_000L, failed = false
+        )
+        assertEquals("快洗", fromOrder.modeName)
+        // status 给了 modelName（307+他人订单带 modelName）→ 优先用它
+        val fromStatus = BoundWasherState.from(
+            status = WasherStatus(isOwner = false, modelName = "标准洗", time = 900, timeIds = "T9"),
+            lastOrder = lastOrder, nowMs = placedMs + 60_000L, failed = false
+        )
+        assertEquals("标准洗", fromStatus.modeName)
+        // 空闲设备不显示模式
+        val idle = BoundWasherState.from(
+            status = WasherStatus(isOwner = true), lastOrder = null, nowMs = placedMs, failed = false
+        )
+        assertEquals("", idle.modeName)
     }
 
     @Test

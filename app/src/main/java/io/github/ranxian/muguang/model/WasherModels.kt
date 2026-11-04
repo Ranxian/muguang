@@ -164,21 +164,21 @@ data class OrderLastBean(
     /**
      * 有人正在用。
      *
-     * 条件 = 有单号 + 状态 0；如果知道模式时长，再排掉「早就该结束却还挂在 0」的脏单
-     * （超时 5 分钟以上就当它已经结束，避免一单卡住让绑定卡片永远显示使用中）。
+     * 判据 = 有单号 + 服务端状态 0（**服务端自己说的「运行中」**，官方 `w7()` 颜色分支：
+     * 0=运行中 / 1=已完成 / 2=异常——设备洗完会把状态翻成 1，这是服务端权威）。
      *
-     * @param startedAtMs 亲眼观测到的启动时刻（轮询到订单开始跑）。传了就以它为准，
-     *   因为 `consumeDate` 是**下单**时间，排队的单可能比真正上水晚十几分钟。
+     * ⚠️ **不要**再用「consumeDate + modeTime」的数学去提前判死。`consumeDate` 是
+     * **下单**时间，排队的单真正上水比它晚十几甚至几十分钟——「排队 40 分钟 + 洗 45 分钟」
+     * 时 elapsed 早就超过 modeTime+宽限，明明在洗却会被判成已结束，
+     * 绑定卡片显示「空闲」（用户实测反馈过的 bug 就是这个）。
+     * 洗完没关的判断交给服务端把 `liquidOrderStatus` 翻成 1，客户端只做展示。
+     *
+     * @param startedAtMs 亲眼观测到的启动时刻。只用于**倒计时起点**（estimateRemainingSec），
+     *   不再参与「是否在用」的判断。
      */
     fun isRunning(nowMs: Long, startedAtMs: Long? = null): Boolean {
         if (liquidOrderStatus != 0) return false
-        if (orderKey.isEmpty()) return false
-        val startMs = startedAtMs?.takeIf { it > 0L } ?: startAtMs
-        if (modeTime > 0 && startMs > 0L) {
-            val elapsed = (nowMs - startMs) / 1000L
-            if (elapsed > modeTime + STALE_GRACE_SEC) return false
-        }
-        return true
+        return orderKey.isNotEmpty()
     }
 
     /**
@@ -186,7 +186,8 @@ data class OrderLastBean(
      * 没有 `modeTime` 或起点解析不了时返回 0（界面显示「剩余时间未知」）。
      *
      * @param startedAtMs 观测到的真实启动时刻；不传就用 `consumeDate`（下单时间）。
-     *   这是估算误差的唯一来源：下单 ≠ 上水，中间可能隔着上一个用户的余量。
+     *   这是估算误差的唯一来源：下单 ≠ 上水，中间可能隔着上一个用户的余量——
+     *   排队的单在这个起点上是**负数**，被夹成 0，界面回退到「下单时间」展示。
      */
     fun estimateRemainingSec(nowMs: Long, startedAtMs: Long? = null): Int {
         if (modeTime <= 0) return 0
@@ -194,11 +195,6 @@ data class OrderLastBean(
         if (startMs <= 0L) return 0
         val elapsed = ((nowMs - startMs) / 1000L).toInt().coerceAtLeast(0)
         return (modeTime - elapsed).coerceAtLeast(0)
-    }
-
-    companion object {
-        /** 超时宽限：模式时长走完还挂 5 分钟以上就按「已结束」处理 */
-        const val STALE_GRACE_SEC = 300
     }
 }
 

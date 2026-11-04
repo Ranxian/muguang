@@ -505,6 +505,7 @@ fun MainScreen(phone: String, viewModel: MainViewModel = viewModel()) {
             // 只有「没绑过这台 且 两个名额都满了」才需要提示满员；已绑定的那台要能解绑
             bindFull = !selectedBound && !viewModel.canBindMoreWashers,
             isBoundHeater = selectedBoundHeater,
+            washerModeName = selected?.snCode?.let { viewModel.boundWasherViews[it]?.modeName },
             onDismiss = { viewModel.showDeviceDetail = false },
             onConfirm = { viewModel.startShower(phone) },
             onBindWasher = { viewModel.selectedDevice?.let { viewModel.bindWasher(it) } },
