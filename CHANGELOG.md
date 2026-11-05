@@ -17,6 +17,23 @@
   （估算剩余的分母）。匹配顺序：typeId 精确 → 价格唯一 → 价格撞车用秒数当第二键；
   模式表按 smallTypeId 进程内缓存。MAC 这条线本来就在用：`lastOrder/byMac` 与
   `device/info/mac`（MAC→SN→washer/status）都是按 MAC 驱动的设备视角链路
+- **三轮深度审查**（数据/逻辑 → UI/功能 → 集成/安全，逐条核实后修复）：
+  - 蓝牙水表「通知栏结束使用」在 App 被系统回收后静默丢失（事件无收件人）——
+    App 不存活时转 WidgetBleService 的 BLE 关阀兜底
+  - 待结算对账把占位 `"0.0"` 账单当终态吞掉待对账记录（真金额出来没人补通知）——
+    占位/零金额留在 remaining 等下一轮（对齐 SettlementEngine 自己的实测结论）
+  - 洗衣机模式表缓存跨项目串数据 + 失败永久缓存（本版反查功能引入）——
+    换项目即清空，失败记时间戳 10 分钟后可重试；价格撞车兜底改「宁缺毋滥」返回 null
+  - MQTT 重连泄漏旧 client（paho 内部广播接收器滞留）；开阀整体预算改为全流程生效
+    （第一步超时就不再发 downRate，返回「结果未知」）；OkHttp 加 15s callTimeout
+  - 加密 Prefs 的 `.all` 全量解密在 keyset 损坏设备上炸启动（init 内迁移即中招）——
+    四处全部 runCatching 兜底；活跃订单 JSON 解析失败留痕（原文进日志），
+    防止坏数据被空表固化
+  - 首页抽屉把手**拖一次后点按永久失效**（dragged 未复位）；小组件未登录态胶囊
+    点击被吞；「更新日志」导出按钮近白底白字；深色抽屉雷达/设备头像/扫描器
+    写死亮色不可见——全部修复，装饰色回归令牌
+  - 其余：账单页签跨项目不复位、登出不清待展示更新弹窗、抽屉行 44dp 触控、
+    local.properties 盘符转义（lint Error 清零）
 - 调研结论（官方 6.5.29 反编译全量清点 + 网络检索）：洗衣机相关接口只有
   `washer/status`、`lastOrder/byMac`、`downRate/modeOrder`、`closeOrder`、
   `query/downRateResult` 与 MQTT `downRate_<手机号>`（本账号推送，对「对面」无用），
