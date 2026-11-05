@@ -67,9 +67,16 @@ object SettlementReconciler {
                 remaining += item
                 return@forEach
             }
+            // 账单先以占位 "0.0" 出现、结算完成后才填金额（SettlementEngine 实测结论）。
+            // 恰好落在占位窗口时**不能当终态**：删掉 pending 且不产生 update，
+            // 之后账单填了真金额也没人补通知。占位/零金额都留在 remaining 里等下一轮。
+            if (amount <= 0.0) {
+                remaining += item
+                return@forEach
+            }
 
             available.remove(matched)
-            if (amount > 0.0) updates += SettlementUpdate(item.snCode, amount)
+            updates += SettlementUpdate(item.snCode, amount)
         }
 
         return SettlementReconciliation(updates, remaining)

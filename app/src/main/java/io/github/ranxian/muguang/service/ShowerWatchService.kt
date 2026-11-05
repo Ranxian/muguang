@@ -9,6 +9,7 @@ import io.github.ranxian.muguang.api.NetworkModule
 import io.github.ranxian.muguang.api.queryUsingSafe
 import io.github.ranxian.muguang.data.CloseDisposition
 import io.github.ranxian.muguang.data.ActiveOrderRepository
+import io.github.ranxian.muguang.data.BleArbiter
 import io.github.ranxian.muguang.data.CloseOutcome
 import io.github.ranxian.muguang.data.KeyedTaskRegistry
 import io.github.ranxian.muguang.data.ShowerController
@@ -237,10 +238,19 @@ class ShowerWatchService : Service() {
         // 关阀要靠 App 内存里的 BLE 连接。服务没有这条连接，只能发事件让 App 走
         // stopBleShower。App 进程不在（连接已丢）时，App 也关不了，如实提示用户。
         if (PrefsHelper.isBleDevice(snCode)) {
-            AppLogger.i("ShowerWatch 检测到蓝牙表 $snCode，转发给 App 走 BLE 关阀")
-            WidgetBridge.clearBusy()
-            MuguangWidget.refreshAll(this)
-            ShowerEvents.notifyStopBleRequest(snCode)
+            if (BleArbiter.appAlive) {
+                AppLogger.i("ShowerWatch 检测到蓝牙表 $snCode，转发给 App 走 BLE 关阀")
+                WidgetBridge.clearBusy()
+                MuguangWidget.refreshAll(this)
+                ShowerEvents.notifyStopBleRequest(snCode)
+            } else {
+                // App 的 ViewModel 已被回收（stopBleRequest 是无 replay 事件，
+                // 没人收就静默丢失——阀照开、卡片弹回「使用中」）。前台服务还活着，
+                // 转 WidgetBleService：它有自己带 BLE 重连的关阀兜底（与小组件同一条路）
+                AppLogger.i("ShowerWatch 蓝牙表 $snCode：App 不存活，转 WidgetBleService 关阀")
+                WidgetBridge.clearBusy()
+                WidgetBleService.close(this, snCode)
+            }
             return
         }
 

@@ -21,6 +21,16 @@ class MqttManager(
             return
         }
 
+        // 旧实例必须先释放：paho 的 MqttAndroidClient 会向 app context 注册
+        // 内部广播接收器，直接覆盖引用 = 每次断网重连泄漏一个实例
+        mqttClient?.let { old ->
+            // isConnected 是平台类型，别直接判空再传 null listener：
+            // disconnect() 无参重载 + close()，把 paho 内部广播接收器摘干净
+            runCatching { old.disconnect() }
+            runCatching { old.close() }
+        }
+        mqttClient = null
+
         val clientId = MqttClient.generateClientId()
         mqttClient = MqttAndroidClient(context, serverUri, clientId)
 

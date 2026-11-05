@@ -598,6 +598,8 @@ class MainViewModel : ViewModel() {
         val small = order.smallTypeId.takeIf { it > 0 }
             ?: device.smallTypeId
             ?: return order
+        // 失败也缓存空表：绑定轮询 5-15s 一轮，不落缓存就会对模式接口重试风暴；
+        // 空表的效果是这张单回退到「下单时间」展示，进程重启后自然重试
         val modes = try {
             washerModesBySmallType.getOrPut(small) {
                 WasherController.loadModes(device.copy(smallTypeId = small)).data.orEmpty()
@@ -606,6 +608,7 @@ class MainViewModel : ViewModel() {
             throw e
         } catch (e: Exception) {
             AppLogger.w("拉取洗衣机模式表失败（smallTypeId=$small）：${e.message}")
+            washerModesBySmallType[small] = emptyList()
             return order
         }
         if (modes.isEmpty()) return order
@@ -2563,6 +2566,8 @@ class MainViewModel : ViewModel() {
         showerError = null
         toastMessage = null
         kickedOut = false
+        // 待展示的更新弹窗不清掉会叠在登录页上挡验证码输入框
+        pendingUpdate = null
         selectedDevice = null
         showDeviceDetail = false
         activeWasherSession = null

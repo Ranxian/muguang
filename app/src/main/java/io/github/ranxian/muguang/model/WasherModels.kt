@@ -67,8 +67,10 @@ fun matchWasherMode(modes: List<WasherMode>, order: OrderLastBean): WasherMode? 
     return when {
         byPrice.isEmpty() -> null
         byPrice.size == 1 -> byPrice.first()
-        order.modeTime > 0 -> byPrice.firstOrNull { it.times == order.modeTime } ?: byPrice.first()
-        else -> byPrice.first()
+        order.modeTime > 0 -> byPrice.firstOrNull { it.times == order.modeTime }
+        // 价格撞车且秒数也对不上：两个候选都可能是对的模式，猜错会展示错误的
+        // 模式名并污染估算分母——按「宁缺毋滥」返回 null，卡片回退下单时间展示
+        else -> null
     }
 }
 
@@ -292,10 +294,14 @@ internal fun parseServerTime(raw: String?): Long {
         "yyyy-MM-dd HH:mm",
         "yyyy/MM/dd HH:mm:ss"
     )
+    val tz = java.util.TimeZone.getTimeZone("Asia/Shanghai")
     for (pattern in patterns) {
         val parsed = runCatching {
             java.text.SimpleDateFormat(pattern, java.util.Locale.CHINA)
-                .apply { isLenient = false }
+                .apply {
+                    isLenient = false
+                    timeZone = tz   // consumeDate 是服务器墙钟；非 +08 设备上也能算对 epoch
+                }
                 .parse(normalized)
         }.getOrNull()
         if (parsed != null) return parsed.time

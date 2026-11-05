@@ -217,7 +217,10 @@ object WidgetRenderer {
             WidgetState.LoggedOut -> {
                 bindHeader(views, "未登录", "点此打开沐光", running = false, showDot = false)
                 bindPanels(context, views, appWidgetId, idleText = "—", runningText = null, busyText = noticeText)
-                bindAct(running = false, disabled = disabled, action = "")
+                // 胶囊是子控件、优先吃掉整卡根布局的点击——action 留空就是「点了没反应」
+                // （NoDevice 分支修过的同款遗漏）。和 1x1 一样送用户进 App
+                bindAct(running = false, disabled = disabled, action = "",
+                    explicit = openAppIntent(context, appWidgetId, TAB_HOME))
             }
 
             WidgetState.NoDevice -> {

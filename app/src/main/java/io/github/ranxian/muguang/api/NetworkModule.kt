@@ -169,6 +169,10 @@ object NetworkModule {
     }
 
     private val okHttpClient = OkHttpClient.Builder()
+        // 单次调用整体预算：OkHttp 默认只有 connect/read 各 10s，慢网下一次调用能拖 20s+，
+        // 击穿小组件 goAsync 的 10s 窗口（ANR）。15s 对 JSON API 足够宽裕；
+        // 20MB 更新包下载走 ApkUpdater 自己的 client，不受影响
+        .callTimeout(15, java.util.concurrent.TimeUnit.SECONDS)
         .addInterceptor(appLogInterceptor)
         .apply {
             if (BuildConfig.DEBUG) {

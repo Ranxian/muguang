@@ -225,6 +225,14 @@ object ShowerController {
             return OpenOutcome.Resumed(orderNo)
         }
 
+        // 整体预算（goAsync 约 10s / 调用方给的 budgetMs）是**全流程**的：
+        // 第一步 queryUsing 吃掉太多就别再发 downRate——此时指令还没发出去，
+        // 按「结果未知」返回，重试没有副作用；发出去之后才进入原有的轮询 deadline。
+        if (System.currentTimeMillis() >= deadline) {
+            AppLogger.w("开阀预算耗尽于 queryUsing 之后，未下发 downRate：$snCode")
+            return OpenOutcome.Unknown
+        }
+
         // 2. 下发开阀指令
         val resp = NetworkModule.apiService.downRateSafe(
             snCode = snCode, auth = NetworkModule.authFields()

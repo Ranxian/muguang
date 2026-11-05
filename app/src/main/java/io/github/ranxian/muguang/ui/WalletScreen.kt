@@ -135,6 +135,10 @@ fun WalletScreen(viewModel: MainViewModel) {
             viewModel.currentProjectName.contains("洗烘")
         ) {
             billCategory = BillCategory.WASHER
+        } else if (billCategory == BillCategory.WASHER) {
+            // 反向也要复位：洗衣学校点过「洗衣机」页签后切到纯洗浴学校，
+            // 不复位的话停在空的「洗衣机账单」，浴资账单藏在另一个 tab 后面
+            billCategory = BillCategory.BATH
         }
     }
 

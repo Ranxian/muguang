@@ -377,6 +377,12 @@ fun RadarProbe(
             ) { spin(onProbeStart) },
         contentAlignment = Alignment.CenterStart
     ) {
+        // 抽屉面板已随明暗翻色（深色 = surface #1C1C1E 系），装饰色必须跟令牌走：
+        // 写死的亮背板色在深色面板上混色后 ≈1:1，雷达整体隐形（审计实锤）
+        val p = Design.palette
+        val arcColor = p.inkSubtle.copy(alpha = 0.55f)
+        val sweepColor = p.inkSubtle.copy(alpha = 0.15f)
+        val dotColor = p.accent
         Column(horizontalAlignment = Alignment.Start) {
             Box(Modifier.size(size)) {
                 Canvas(Modifier.fillMaxSize()) {
@@ -386,7 +392,7 @@ fun RadarProbe(
                     rotate(a) {
                         // 外圈弧（留 60° 缺口，旋转时像雷达扫描线）
                         drawArc(
-                            color = Color(0x8C1D1D1F),
+                            color = arcColor,
                             startAngle = -90f, sweepAngle = 300f, useCenter = false,
                             topLeft = Offset(c.x - r + 2.dp.toPx(), c.y - r + 2.dp.toPx()),
                             size = Size((r - 2.dp.toPx()) * 2, (r - 2.dp.toPx()) * 2),
@@ -394,7 +400,7 @@ fun RadarProbe(
                         )
                         // 内圈 conic 扫掠
                         drawArc(
-                            brush = Brush.sweepGradient(listOf(Color(0x261D1D1F), Color.Transparent)),
+                            brush = Brush.sweepGradient(listOf(sweepColor, Color.Transparent)),
                             startAngle = -90f, sweepAngle = 360f, useCenter = false,
                             topLeft = Offset(c.x - r * 0.58f, c.y - r * 0.58f),
                             size = Size(r * 1.16f, r * 1.16f),
@@ -405,14 +411,14 @@ fun RadarProbe(
                         for (k in 0 until 4) {
                             val rad = Math.toRadians((90.0 * k))
                             drawCircle(
-                                Color(0xFF0071E3),
+                                dotColor,
                                 radius = 1.6.dp.toPx(),
                                 center = Offset(c.x + orbitR * cos(rad).toFloat(), c.y + orbitR * sin(rad).toFloat())
                             )
                         }
                     }
                     // 中心点（不随旋转，始终居中）
-                    drawCircle(Color(0xFF0071E3), radius = r * 0.16f, center = c)
+                    drawCircle(dotColor, radius = r * 0.16f, center = c)
                 }
             }
             if (showCaption) {
@@ -420,8 +426,7 @@ fun RadarProbe(
                 Text(
                     if (scanning) "探测中…" else "点按探测",
                     fontSize = 9.sp,
-                    // 抽屉的白 80% 玻璃最浅到 #E8E8EA：这里给 7.2:1，和抽屉次级文字同一档
-                    color = Color(0xFF4A4A4F)
+                    color = p.inkSubtle
                 )
             }
         }
@@ -436,8 +441,9 @@ fun RadarProbe(
 fun CubeSpinner(
     modifier: Modifier = Modifier,
     size: Dp = 16.dp,
-    color: Color = Color(0xFF0071E3),
+    color: Color? = null,
 ) {
+    val spinnerColor = color ?: Design.palette.accent
     val t = rememberInfiniteTransition(label = "cube")
     val rx by t.animateFloat(0f, 385f, infiniteRepeatable(tween(2000, easing = LinearEasing)), label = "rx")
     val ry by t.animateFloat(0f, 385f, infiniteRepeatable(tween(2000, easing = LinearEasing)), label = "ry")
@@ -451,8 +457,8 @@ fun CubeSpinner(
                 cameraDistance = 8f * density
                 transformOrigin = androidx.compose.ui.graphics.TransformOrigin(0.5f, 0.5f)
             }
-            .border(1.5.dp, color, RoundedCornerShape(3.dp))
-            .background(color.copy(alpha = 0.16f), RoundedCornerShape(3.dp))
+            .border(1.5.dp, spinnerColor, RoundedCornerShape(3.dp))
+            .background(spinnerColor.copy(alpha = 0.16f), RoundedCornerShape(3.dp))
     )
 }
 

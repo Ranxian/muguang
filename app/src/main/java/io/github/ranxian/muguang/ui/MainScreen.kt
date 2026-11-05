@@ -396,7 +396,7 @@ fun MainScreen(phone: String, viewModel: MainViewModel = viewModel()) {
                             }
                             Spacer(Modifier.height(4.dp))
                             Text(
-                                displayBalance?.let { "¥%.2f".format(it) } ?: "¥ —",
+                                displayBalance?.let { MoneyFormat.withSymbol(it) } ?: "¥ —",
                                 fontSize = 34.sp,
                                 fontWeight = FontWeight.ExtraBold,
                                 color = cardInk
@@ -477,7 +477,7 @@ fun MainScreen(phone: String, viewModel: MainViewModel = viewModel()) {
                     viewModel = viewModel,
                     devices = filteredDevices,
                     hasScanPerm = hasScanPerm,
-                    balanceText = displayBalance?.let { "¥%.2f".format(it) } ?: "¥ —",
+                    balanceText = displayBalance?.let { MoneyFormat.withSymbol(it) } ?: "¥ —",
                     onScanStart = { scanWithPermission() },
                     onScanQr = { scanLauncher.launch(Intent(context, QrScanActivity::class.java)) },
                     onOpenDevice = { device -> viewModel.fetchDeviceInfo(device.mac) },
@@ -906,8 +906,11 @@ private fun P1HomeDrawer(
                     },
                     onDragStarted = { dragged = false },
                     onDragStopped = {
-                        // 整面可拖：上拉开 / 下拉近；松手按过半判定归位
+                        // 整面可拖：上拉开 / 下拉近；松手按过半判定归位。
+                        // 结束后必须把 dragged 复位——纯点按不会触发 onDragStarted，
+                        // 不复位的话第一次拖拽之后把手的点按开合就永久失效
                         if (dragged) animateTo(if (offsetPx < collapsedOffset / 2) 0f else collapsedOffset)
+                        dragged = false
                     }
                 )
         ) {
@@ -1085,7 +1088,7 @@ private fun P1HomeDrawer(
                         Row(
                             Modifier
                                 .fillMaxWidth()
-                                .heightIn(min = 44.dp)
+                                .heightIn(min = 48.dp)
                                 .clickable {
                                     viewModel.selectedDevice = heaterDevice
                                     viewModel.showDeviceDetail = true
@@ -1127,7 +1130,7 @@ private fun P1HomeDrawer(
                         Row(
                             Modifier
                                 .fillMaxWidth()
-                                .heightIn(min = 44.dp)
+                                .heightIn(min = 48.dp)
                                 .clickable {
                                     viewModel.selectedDevice = device
                                     viewModel.showDeviceDetail = true
@@ -1222,7 +1225,7 @@ private fun P1HomeDrawer(
                             Modifier
                                 .size(34.dp)
                                 .clip(RoundedCornerShape(9.dp))
-                                .background(Color(0xFFE5F0FF)),
+                                .background(sheetPalette.surfaceTonal),
                             contentAlignment = Alignment.Center
                         ) {
                             DeviceGlyph(device.typeEmoji, emojiSize = 14.sp, iconSize = 18.dp, tint = sheetIcon)

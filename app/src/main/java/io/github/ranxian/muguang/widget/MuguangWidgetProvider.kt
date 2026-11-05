@@ -450,6 +450,7 @@ internal object WidgetBridge {
     /** 需要短暂停留在桌面上的提示（「选用」失败、开阀失败），由 [takeNotice] 取走 */
     private var notice: WidgetRenderer.DisabledReason? = null
 
+    @Synchronized
     fun markBusy(reason: WidgetRenderer.DisabledReason) {
         notice = null            // 新操作开始，上一次留下的提示作废
         unknown = false
@@ -462,6 +463,7 @@ internal object WidgetBridge {
      * 小组件弹不了 toast，失败信息只能借「进行中」这个位置显示一会儿。
      * 显示时长由调用方（Provider 的 `postDelayed`）控制。
      */
+    @Synchronized
     fun markNotice(reason: WidgetRenderer.DisabledReason) {
         unknown = false
         notice = reason
@@ -476,9 +478,11 @@ internal object WidgetBridge {
      */
     private var delegated = false
 
+    @Synchronized
     fun markDelegated() { delegated = true }
 
     /** 取走「已交给服务」标记。服务自己那条路径不走广播，所以取过即清 */
+    @Synchronized
     fun consumeDelegated(): Boolean {
         val v = delegated
         delegated = false
@@ -486,6 +490,7 @@ internal object WidgetBridge {
     }
 
     /** 取走待展示的提示，取过即失效（提示只该展示一次） */
+    @Synchronized
     fun takeNotice(): WidgetRenderer.DisabledReason? {
         val n = notice
         notice = null
@@ -493,19 +498,23 @@ internal object WidgetBridge {
     }
 
     /** 只在这个提示还挂在屏幕上时清掉它；期间用户又点了别的按钮就交给那次操作收尾 */
+    @Synchronized
     fun clearNotice(reason: WidgetRenderer.DisabledReason) {
         if (busy == reason) busy = null
     }
 
+    @Synchronized
     fun markUnknown() {
         busy = null
         unknown = true
     }
 
+    @Synchronized
     fun clearUnknown() {
         unknown = false
     }
 
+    @Synchronized
     fun clearBusy() {
         busy = null
         // unknown 不清：它表示"上一次操作结果未知"，要等用户手动刷新或 App 对齐后才消
@@ -517,6 +526,7 @@ internal object WidgetBridge {
     }
 
     /** App 侧刚对过账，桌面上残留的"状态未知"已经不准了，清掉 */
+    @Synchronized
     fun clearAllUnknown() {
         unknown = false
     }

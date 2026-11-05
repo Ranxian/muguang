@@ -112,7 +112,7 @@ object PrefsHelper {
         bases.forEach { base ->
             val scoped = "${base}__project_${project.ifBlank { "none" }}"
             if (!prefs.contains(scoped)) {
-                when (val value = prefs.all[base]) {
+                when (val value = runCatching { prefs.all[base] }.getOrNull()) {
                     is String -> editor.putString(scoped, value)
                     is Float -> editor.putFloat(scoped, value)
                     is Long -> editor.putLong(scoped, value)
@@ -127,9 +127,15 @@ object PrefsHelper {
             .putBoolean("projectSessionsV1", true).apply()
     }
 
-    fun hasWasherSession(): Boolean = prefs.all.any { (key, value) ->
-        key.startsWith("washerSessionJson__project_") && value is String && value.isNotBlank()
-    }
+    fun hasWasherSession(): Boolean =
+        // EncryptedSharedPreferences 的 .all 会全量解密，keyset 损坏的设备上抛
+        // SecurityException——这里只是想知道「有没有会话」，坏了就当没有，
+        // 让上层走重新开始的路径而不是在查询里炸掉
+        runCatching {
+            prefs.all.any { (key, value) ->
+                key.startsWith("washerSessionJson__project_") && value is String && value.isNotBlank()
+            }
+        }.getOrDefault(false)
 
     /**
      * 清掉**所有项目**下持久化的洗衣机会话。
@@ -140,7 +146,9 @@ object PrefsHelper {
      * 「设备使用中，无法退出」永远成立。
      */
     fun clearAllWasherSessions() {
-        val stale = prefs.all.keys.filter { it.startsWith("washerSessionJson__project_") }
+        val stale = runCatching {
+            prefs.all.keys.filter { it.startsWith("washerSessionJson__project_") }
+        }.getOrDefault(emptyList())
         if (stale.isEmpty()) return
         prefs.edit().apply { stale.forEach { remove(it) } }.apply()
     }
@@ -238,7 +246,8 @@ object PrefsHelper {
                 // 学号和余额是账号数据，换账号必须清掉，否则会显示上一任的
                 .remove("userStudentId").remove("campusBalance").remove("campusBalanceTime")
                 .remove("walletBalance")
-            prefs.all.keys
+            // .all 的全量解密遍历同 hasWasherSession 的风险：登出路径炸掉等于退不出来
+            runCatching { prefs.all.keys }.getOrDefault(emptySet())
                 .filter {
                     it.startsWith("consume_") ||
                         it.startsWith("billCache_") ||
@@ -382,7 +391,15 @@ object PrefsHelper {
                 result.add(gson.fromJson(item, ActiveOrder::class.java))
             }
             result
-        } catch (_: Exception) { mutableListOf() }
+        } catch (e: Exception) {
+            // 解析失败返回空表没问题，但必须留痕：调用方随后 saveActiveOrders 会把
+            // 空表写回，坏数据被固化前至少能在日志里看到原文
+            io.github.ranxian.muguang.utils.AppLogger.e(
+                "activeOrders JSON 解析失败，活跃订单清空（原文见下条日志）", e
+            )
+            io.github.ranxian.muguang.utils.AppLogger.w("activeOrders 原文: $json")
+            mutableListOf()
+        }
     }
 
     @Synchronized
