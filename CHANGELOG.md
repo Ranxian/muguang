@@ -11,6 +11,12 @@
   （如「标准洗 · 剩余 21:33」「快洗 · 17:00 下单」），设备详情弹窗新增「运行模式」行。
   模式名来自 `washer/status.modelName`（服务端对 307+他人订单也可能下发）→
   `lastOrder.typeName` 兜底；两者相同去重
+- **用他人订单的价格/模式编号反查模式**：`lastOrder/byMac` 的 `typeId`（= `xfModel`，
+  与 `/device/mode/list` 同一编号空间）和 `money`（订单价格，厘，与模式表同单位）
+  对模式表反查，`typeName` / `modeTime` 缺失时也能还原「对面用什么模式洗」与权威时长
+  （估算剩余的分母）。匹配顺序：typeId 精确 → 价格唯一 → 价格撞车用秒数当第二键；
+  模式表按 smallTypeId 进程内缓存。MAC 这条线本来就在用：`lastOrder/byMac` 与
+  `device/info/mac`（MAC→SN→washer/status）都是按 MAC 驱动的设备视角链路
 - 调研结论（官方 6.5.29 反编译全量清点 + 网络检索）：洗衣机相关接口只有
   `washer/status`、`lastOrder/byMac`、`downRate/modeOrder`、`closeOrder`、
   `query/downRateResult` 与 MQTT `downRate_<手机号>`（本账号推送，对「对面」无用），

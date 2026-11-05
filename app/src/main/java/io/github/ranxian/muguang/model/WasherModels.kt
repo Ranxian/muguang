@@ -43,6 +43,35 @@ fun washerMainModes(modes: List<WasherMode>): List<WasherMode> =
     modes.filter { it.isMainMode }
         .distinctBy { it.typeId }
 
+/**
+ * 用「他人订单」反查它用的是哪个模式（[WasherMode]）。
+ *
+ * `lastOrder/byMac` 有时缺 `typeName` / `modeTime`，但 `typeId`（= `xfModel`，
+ * 与模式列表同一编号空间）和 `money`（订单价格，厘，与模式列表同单位）通常都在——
+ * 拿它们对 `/device/mode/list` 的模式表反查，就能还原「对面在用什么模式洗」
+ * 和**权威的模式总时长**（估算剩余的除数）。
+ *
+ * 匹配优先级：
+ * 1. `typeId` 精确命中（同一编号空间，最可靠）
+ * 2. 价格唯一命中（该校不同模式价格一般不同）
+ * 3. 价格撞车时用 `modeTime` 秒数当第二个键；仍分不出来返回 null（宁缺毋滥）
+ */
+fun matchWasherMode(modes: List<WasherMode>, order: OrderLastBean): WasherMode? {
+    val main = washerMainModes(modes)
+    if (main.isEmpty()) return null
+    if (order.typeId > 0) {
+        main.firstOrNull { it.typeId == order.typeId }?.let { return it }
+    }
+    if (order.money <= 0) return null
+    val byPrice = main.filter { it.money == order.money }
+    return when {
+        byPrice.isEmpty() -> null
+        byPrice.size == 1 -> byPrice.first()
+        order.modeTime > 0 -> byPrice.firstOrNull { it.times == order.modeTime } ?: byPrice.first()
+        else -> byPrice.first()
+    }
+}
+
 data class WasherStartData(
     val isOwner: Boolean = true,
     val perMoney: Int = 0,

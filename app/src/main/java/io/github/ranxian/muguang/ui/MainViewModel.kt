@@ -56,6 +56,7 @@ import io.github.ranxian.muguang.model.AccountInfo
 import io.github.ranxian.muguang.model.ActiveOrder
 import io.github.ranxian.muguang.model.CachedBill
 import io.github.ranxian.muguang.model.CachedDevice
+import io.github.ranxian.muguang.model.matchWasherMode
 import io.github.ranxian.muguang.model.UseCodeData
 import io.github.ranxian.muguang.model.BillItem
 import io.github.ranxian.muguang.model.DeviceInfo
@@ -584,11 +585,49 @@ class MainViewModel : ViewModel() {
         }
     }
 
+    /** 模式表缓存（按 smallTypeId）：他人订单的价格/编号反查用，进程内一份即可 */
+    private val washerModesBySmallType = mutableMapOf<Int, List<WasherMode>>()
+
+    /**
+     * 他人订单缺 `typeName` / `modeTime` 时，用订单里的 `typeId`（= `xfModel`）
+     * 或价格对模式表反查，补全模式名与权威时长。补不动就原样返回——
+     * 卡片退回「对方几点下单」的展示，不虚构。
+     */
+    private suspend fun fillOrderModeFromPrice(order: OrderLastBean, device: DeviceInfo): OrderLastBean {
+        if (order.typeName?.isNotBlank() == true && order.modeTime > 0) return order
+        val small = order.smallTypeId.takeIf { it > 0 }
+            ?: device.smallTypeId
+            ?: return order
+        val modes = try {
+            washerModesBySmallType.getOrPut(small) {
+                WasherController.loadModes(device.copy(smallTypeId = small)).data.orEmpty()
+            }
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            AppLogger.w("拉取洗衣机模式表失败（smallTypeId=$small）：${e.message}")
+            return order
+        }
+        if (modes.isEmpty()) return order
+        val matched = matchWasherMode(modes, order) ?: return order
+        AppLogger.w(
+            "ORDER-MODE 反查命中：money=${order.money} typeId=${order.typeId}" +
+                " -> ${matched.displayName} times=${matched.times}"
+        )
+        return order.copy(
+            typeName = order.typeName?.takeIf { it.isNotBlank() } ?: matched.typeName,
+            modeTime = if (order.modeTime > 0) order.modeTime else matched.times,
+        )
+    }
+
     /** 单台设备的双查 + 观测更新；异常只污染这一台的槽位，不拖垮另一台 */
     private suspend fun refreshOneBoundWasher(device: DeviceInfo) {
         try {
             val status = WasherController.status(device)
-            val lastOrder = WasherController.lastOrder(device)
+            var lastOrder = WasherController.lastOrder(device)
+            // 他人订单缺 typeName/modeTime 时，用订单价格/模式编号对模式表反查补全：
+            // 「对面用什么模式」和估算剩余的分母都靠它
+            lastOrder = lastOrder?.let { fillOrderModeFromPrice(it, device) }
             val nowMs = NetworkModule.serverNowMs()
             val startedAt = activeWasherSession
                 ?.takeIf { it.device.snCode == device.snCode }
