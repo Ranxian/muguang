@@ -219,4 +219,25 @@ class UpdateApiParseTest {
         assertEquals("v1.1.1", pickLatestRelease(listOf(rc, stable))!!.tagName)
         assertNull(pickLatestRelease(emptyList()))
     }
+
+    // ── .sha256 附件内容解析（Gitee 来源的校验值）──
+
+    @Test
+    fun `sha256 附件内容解析出摘要`() {
+        assertEquals(
+            "1087aeb71f4398becc7d34d94b5bd7e0e1f336d0e5f735d8931e6b2d35f3d2c9",
+            parseSha256File("1087aeb71f4398becc7d34d94b5bd7e0e1f336d0e5f735d8931e6b2d35f3d2c9  muguang-1.1.3-arm64-v8a.apk")
+        )
+        assertEquals(
+            "1087aeb71f4398becc7d34d94b5bd7e0e1f336d0e5f735d8931e6b2d35f3d2c9",
+            parseSha256File("1087AEB71F4398BECC7D34D94B5BD7E0E1F336D0E5F735D8931E6B2D35F3D2C9")
+        )
+    }
+
+    @Test
+    fun `sha256 附件格式不符返回 null`() {
+        assertNull(parseSha256File(""))
+        assertNull(parseSha256File("not-a-digest  file.apk"))
+        assertNull(parseSha256File("12345  short.apk"))
+    }
 }

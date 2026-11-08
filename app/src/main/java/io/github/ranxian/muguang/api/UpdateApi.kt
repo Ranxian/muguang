@@ -134,6 +134,15 @@ private fun parseReleaseObject(o: com.google.gson.JsonObject): UpdateRelease = U
  *
  * 抽成顶层 internal 便于单测：解析错字段的用户侧表现是「发了新版却收不到提示」。
  */
+/** `.sha256` 附件内容 → 64 位十六进制摘要；格式不符返回 null */
+internal fun parseSha256File(content: String): String? {
+    // 取第一个空白前的 token（.sha256 附件格式：`<64 位摘要><空白><文件名>`）；
+    // 不用正则，避免转义在各层传递中走样
+    val firstToken = content.trim().takeWhile { !it.isWhitespace() }
+    val hex = firstToken.lowercase()
+    return hex.takeIf { it.length == 64 && hex.all { c -> c.isDigit() || c in 'a'..'f' } }
+}
+
 internal fun parseGiteeRelease(json: String): UpdateRelease? =
     try {
         parseGiteeReleaseObject(JsonParser.parseString(json).asJsonObject)
@@ -194,8 +203,10 @@ internal fun sortNewestFirst(releases: List<UpdateRelease>): List<UpdateRelease>
 /**
  * 更新源 API 客户端（Release / 仓库信息）。
  *
- * 双源：GitHub 为主（[FEED_REPO]），Gitee 镜像为兜底（[MIRROR_REPO]）。
- * [FEED_REPO] 为空时视为未配置：全部方法返回 null/空，不发起任何网络请求。
+ * 双源：**Gitee 为主**（[MIRROR_REPO]，国内可达性远好于 GitHub），GitHub 为兜底
+ * （[FEED_REPO]）。检查、校验值、下载三个环节都 Gitee 优先，坏网络下不再有
+ * 8-16s 的 GitHub 超时等待。[FEED_REPO] 为空时视为未配置：全部方法返回 null/空，
+ * 不发起任何网络请求。
  */
 object UpdateApi {
     private const val BASE = "https://api.github.com"
@@ -261,14 +272,8 @@ object UpdateApi {
             }
         }
 
-    /** 最新 Release；GitHub 失败时兜底 Gitee，两者都失败返回 null */
+    /** 最新 Release；Gitee 优先，GitHub 兜底，两者都失败返回 null */
     suspend fun fetchLatestRelease(): UpdateRelease? {
-        try {
-            val json = getJson("/repos/$REPO/releases/latest")
-            if (json != null) parseRelease(JsonParser.parseString(json).asJsonObject)?.let { return it }
-        } catch (e: Exception) {
-            AppLogger.e("解析 release 失败", e)
-        }
         val giteeJson = getGiteeJson("/repos/$GITEE_REPO/releases/latest")
         if (giteeJson != null) {
             try {
@@ -277,7 +282,12 @@ object UpdateApi {
                 AppLogger.e("解析 Gitee release 失败", e)
             }
         }
-        // /releases/latest 不可用（或解析失败）时回落到列表里挑最大版本
+        try {
+            val json = getJson("/repos/$REPO/releases/latest")
+            if (json != null) parseRelease(JsonParser.parseString(json).asJsonObject)?.let { return it }
+        } catch (e: Exception) {
+            AppLogger.e("解析 release 失败", e)
+        }
         return pickLatestRelease(fetchGiteeReleases())
     }
 
@@ -291,6 +301,10 @@ object UpdateApi {
      * 两个源的 tag 与附件名保持一致，所以无论拿到哪边的数据，下载直链都拼得出来。
      */
     suspend fun fetchReleases(): List<UpdateRelease> {
+        // Gitee 优先：国内可达性远好于 api.github.com（2026-11 实测整段断流）；
+        // 之前 GitHub 优先时，坏网络下检查要白等 8-16s 超时才落到 Gitee。
+        val gitee = fetchGiteeReleases()
+        if (gitee.isNotEmpty()) return gitee
         val github = try {
             val json = getJson("/repos/$REPO/releases?per_page=10")
             json?.let {
@@ -302,9 +316,9 @@ object UpdateApi {
             AppLogger.e("解析 releases 失败", e)
             emptyList()
         }
-        if (github.isNotEmpty()) return github
-        // Gitee 列表是旧→新，必须自己排一遍再交给「拿第一当最新」的调用方
-        return sortNewestFirst(fetchGiteeReleases())
+        // Gitee 没有数据才会走到 GitHub：两个源的顺序习惯不同（Gitee 旧→新），
+        // 统一按版本号新→旧排，交给「拿第一当最新」的调用方
+        return sortNewestFirst(github)
     }
 
     /** Gitee 镜像仓库的发行版列表（最新在前，滤掉预发布）；失败返回空列表 */
@@ -321,6 +335,64 @@ object UpdateApi {
     }
 
     private fun parseRelease(o: com.google.gson.JsonObject): UpdateRelease = parseReleaseObject(o)
+
+    /**
+     * 拿「某 tag 某附件」的期望 SHA-256，供下载后校验。
+     *
+     * 双源：Gitee 发行版的 **`.sha256` 附件**（内容就是 `<digest>  <文件名>`，
+     * 94 字节，发版流程保证与 APK 附件成对上传）优先；Gitee 没有就回落 GitHub
+     * asset 的 `digest` 字段。**两边必须与下载地址同源**——从 Gitee 检查、Gitee
+     * 下载的包配 GitHub CI 包的 digest 会校验失败（v1.1.3 实踩：两端构建环境
+     * 不同，zip 字节不同）。任一源失败返回 null = 降级为仅签名校验，不阻断更新。
+     */
+    suspend fun fetchAssetSha256(releaseTag: String, fileName: String): String? {
+        val encoded = java.net.URLEncoder.encode(releaseTag, "UTF-8")
+        // ① Gitee：发行版里找同名 .sha256 附件，拉内容解析
+        getGiteeJson("/repos/$GITEE_REPO/releases/tags/$encoded")?.let { json ->
+            try {
+                val assets = JsonParser.parseString(json).asJsonObject.getAsJsonArray("assets") ?: return@let
+                val shaAsset = assets.map { it.asJsonObject }
+                    .firstOrNull { it.get("name")?.asString == fileName + ".sha256" }
+                val url = shaAsset?.get("browser_download_url")?.asString
+                if (!url.isNullOrBlank()) {
+                    getPlain(url)?.let { content ->
+                        parseSha256File(content)?.let { return it }
+                    }
+                }
+            } catch (e: Exception) {
+                AppLogger.w("Gitee .sha256 获取失败：${e.message}")
+            }
+        }
+        // ② GitHub asset 的 digest 字段
+        getJson(releaseByTagUrl(releaseTag))?.let { json ->
+            try {
+                val assets = JsonParser.parseString(json).asJsonObject.getAsJsonArray("assets") ?: return@let
+                val digest = assets.map { it.asJsonObject }
+                    .firstOrNull { it.get("name")?.asString == fileName }
+                    ?.get("digest")?.asString
+                    ?: return@let
+                digest.substringAfter("sha256:", "").lowercase()
+                    .takeIf { it.matches(Regex("[0-9a-f]{64}")) }
+                    ?.let { return it }
+            } catch (e: Exception) {
+                AppLogger.w("GitHub digest 解析失败：${e.message}")
+            }
+        }
+        return null
+    }
+
+    private fun getPlain(url: String): String? = try {
+        client.newCall(Request.Builder().url(url).header("User-Agent", "Muguang-Android").build())
+            .execute().use { resp ->
+                if (!resp.isSuccessful) {
+                    AppLogger.w("Gitee 附件下载 ${resp.code} $url")
+                    null
+                } else resp.body?.string()
+            }
+    } catch (e: Exception) {
+        AppLogger.w("Gitee 附件下载失败 $url: ${e.message}")
+        null
+    }
 
     /** 仓库信息；失败返回 null */
     suspend fun fetchRepoInfo(): UpdateRepoInfo? {

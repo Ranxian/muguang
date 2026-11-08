@@ -294,33 +294,10 @@ object ApkUpdater {
         return target
     }
 
-    private fun fetchExpectedSha256(releaseTag: String, fileName: String): String? {
-        // 正式包不指向任何代码托管平台：更新源未配置时这里直接短路
-        if (!UpdateApi.configured) return null
-        val req = Request.Builder()
-            .url(UpdateApi.releaseByTagUrl(releaseTag))
-            .header("Accept", "application/json")
-            .header("User-Agent", "Muguang-Android")
-            .build()
-        return try {
-            client.newCall(req).execute().use { resp ->
-                if (!resp.isSuccessful) return null
-                val json = resp.body?.string() ?: return null
-                val assets = JsonParser.parseString(json).asJsonObject.getAsJsonArray("assets")
-                    ?: return null
-                val digest = assets
-                    .map { it.asJsonObject }
-                    .firstOrNull { it.get("name")?.asString == fileName }
-                    ?.get("digest")?.asString
-                    ?: return null
-                digest.substringAfter("sha256:", "")
-                    .lowercase()
-                    .takeIf { it.matches(Regex("[0-9a-f]{64}")) }
-            }
-        } catch (_: Exception) {
-            null
-        }
-    }
+    private suspend fun fetchExpectedSha256(releaseTag: String, fileName: String): String? =
+        // 双源：Gitee .sha256 附件优先，GitHub asset digest 兜底（UpdateApi 统一封装，
+        // 与「检查更新」的源顺序一致——从哪个源检查，就从哪个源拿校验值）
+        UpdateApi.fetchAssetSha256(releaseTag, fileName)
 
     private fun sha256(file: File): String {
         val digest = MessageDigest.getInstance("SHA-256")
