@@ -29,7 +29,11 @@ class PendingSettlementTest {
     }
 
     @Test
-    fun `zero bill completes pending record without overwriting previous amount`() {
+    fun `zero bill is a settlement placeholder and keeps the pending record`() {
+        // 账单先以占位 "0.0" 出现、一秒后才填真金额（API-qzxy.md §4.11 实测：
+        // 12:47:36 是 "0.0"，12:47:37 变 "0.41"）。「匹配到账单」本身就是
+        // 有消费的证据——在占位窗口完结掉 pending，真金额出来就没人补通知了。
+        // 留在 remaining 等下一轮对账。
         val result = SettlementReconciler.reconcile(
             listOf(pending("device-a", "order-a")),
             listOf(bill("order-a", "测试热水器", "2026-09-22 17:00:00", "0.00")),
@@ -37,7 +41,7 @@ class PendingSettlementTest {
         )
 
         assertTrue(result.updates.isEmpty())
-        assertTrue(result.remaining.isEmpty())
+        assertEquals(listOf("device-a"), result.remaining.map { it.snCode })
     }
 
     @Test
