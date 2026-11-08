@@ -444,7 +444,9 @@ class BoundWasherStateTest {
     }
 
     private fun format(ms: Long): String =
-        java.text.SimpleDateFormat("yyyy-MM-dd HH:mm:ss", java.util.Locale.CHINA).format(java.util.Date(ms))
+        java.text.SimpleDateFormat("yyyy-MM-dd HH:mm:ss", java.util.Locale.CHINA)
+            .apply { timeZone = java.util.TimeZone.getTimeZone("Asia/Shanghai") }
+            .format(java.util.Date(ms))
 
     @Test
     fun `countdown ticks down and floors at zero`() {        assertEquals(600, BoundWasherState.countdown(600, 1_000L, 1_000L))

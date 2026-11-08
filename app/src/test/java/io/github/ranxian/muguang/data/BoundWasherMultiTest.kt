@@ -72,7 +72,9 @@ class BoundWasherMultiTest {
         placedAtMs: Long,
         modeTimeSec: Int = 1800
     ): OrderLastBean {
-        val placed = SimpleDateFormat("yyyy-MM-dd HH:mm:ss", Locale.CHINA).format(Date(placedAtMs))
+        val placed = SimpleDateFormat("yyyy-MM-dd HH:mm:ss", Locale.CHINA)
+            .apply { timeZone = java.util.TimeZone.getTimeZone("Asia/Shanghai") }
+            .format(Date(placedAtMs))
         return OrderLastBean(
             liquidOrderNo = key,
             consumeDate = placed,
