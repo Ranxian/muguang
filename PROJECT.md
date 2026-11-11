@@ -18,14 +18,14 @@ utils/         偏好、日志、加密、通知
 ```
 
 依赖方向单向向下：`ui → data → api/model`。`data` 不反向引用 `ui`，
-所以剩余时间、结算、账单解析这些东西可以脱离 Android 跑单测（121 个测试都在这层）。
+所以剩余时间、结算、账单解析这些东西可以脱离 Android 跑单测（当前 216 个测试大多在这层）。
 
 ## 2. 设计系统
 
 ### 2.1 令牌分三层
 
 1. **基础令牌**（`DesignTokens.kt`）：颜色、形状、字体、面板、动效五组，纯数据类
-2. **风格包**（`StylePacks.kt`）：五套具体取值 × 浅色/深色
+2. **风格包**（`StylePacks.kt`）：四套具体取值 × 浅色/深色
 3. **组件**（`Components.kt`）：`SurfaceCard` / `SectionHeader` / `MetricValue` / `StatusBadge` /
    `PrimaryAction` / `QuietAction` / `Hairline`
 
@@ -33,17 +33,16 @@ utils/         偏好、日志、加密、通知
 `MuguangTheme` 把风格包翻译成 `AppColorSet` 与 Material3 `ColorScheme`，
 所以还没重写的旧页面也会自动跟随配色，不会出现两套色板打架。
 
-### 2.2 为什么要五套而不是一套
+### 2.2 为什么要四套而不是一套
 
-用户先要选型。把五套做成并列的风格包，选型后不需要删除任何一套——切换开关留在设置页，
+用户先要选型。把四套做成并列的风格包，选型后不需要删除任何一套——切换开关留在设置页，
 以后调整某个页面的层级设计时，可以立刻在多套视觉下检查是否都成立。
 
 ### 2.3 形状与描边的取舍
 
-- GPT / Claude / 方舟：1dp 描边，**不用阴影**。阴影在深色底上等于消失，描边不会。
-- Apple：0.5dp 极浅投影 + 无描边，模拟系统的分组卡片。
-- Google：无描边无阴影，用 `surfaceTonal` 色块分区。
-- 方舟：`CutCornerShape(topEnd, bottomStart)`，两个对角切，比四角全切更稳（不会像缺角图片）。
+- GPT（极简）/ Claude（暖纸）/ 方舟（终端）：1dp 描边，**不用阴影**。阴影在深色底上等于消失，描边不会。
+- Apple（默认）：0.5dp 极浅投影 + 无描边，模拟系统的分组卡片。
+- 方舟（终端）：`CutCornerShape(topEnd, bottomStart)`，两个对角切，比四角全切更稳（不会像缺角图片）。
 
 ## 3. 沉浸光感
 
@@ -86,7 +85,7 @@ utils/         偏好、日志、加密、通知
 
 - 包名 `io.github.ranxian.muguang`，applicationId 相同
 - 偏好文件名 `muguang_prefs` / `muguang_prefs_plain`，通知渠道 `muguang_alert` 等
-- 更新源未配置（`UpdateApi.FEED_REPO` 留空），检查更新降级为本地提示
+- 更新源：GitHub `Ranxian/muguang`（兜底）+ Gitee 镜像 `dyed-string/muguang`（检查与下载优先，见 `UpdateApi.MIRROR_REPO`）
 - 换包名意味着**不能覆盖安装旧版**：两者是两个独立应用，数据不共享
 
 ## 6. 已知限制

@@ -19,17 +19,18 @@ class RechargeSignerTest {
         "loginCode" to "LC-TEST",
         "payWay" to "2",
         "rechargeMoney" to "10",
-        "telPhone" to "13479706620"
+        // 虚构测试号：真实账号手机号不进公开仓库
+        "telPhone" to "13800138000"
     )
 
     @Test
     fun `signature matches the official algorithm`() {
-        assertEquals("fce3e48862d3f79766f1de729e5dae1b", RechargeSigner.sign(official))
+        assertEquals("08b50a28277a2ba74d0013d8e479c850", RechargeSigner.sign(official))
     }
 
     @Test
     fun `signature does not use the native library's other candidate key`() {
-        assertFalse(RechargeSigner.sign(official) == "81d648bd15c8f626f4e8baf9259e9b9c")
+        assertFalse(RechargeSigner.sign(official) == "e1176b9da37671fb51a3b22e5496038b")
     }
 
     @Test

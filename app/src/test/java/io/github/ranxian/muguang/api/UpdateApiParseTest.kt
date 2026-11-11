@@ -136,7 +136,7 @@ class UpdateApiParseTest {
         assertFalse(io.github.ranxian.muguang.utils.ApkUpdater.isNewer(r.tagName, "1.2.0"))
     }
 
-    // ── Gitee 发行版（检查更新的兜底源，字段与 GitHub 不同）──
+    // ── Gitee 发行版（检查更新主源，字段与 GitHub 不同）──
 
     /** 取自 Gitee OpenAPI v5 releases 的真实结构（节选，字段名原样保留） */
     private val giteeReleaseJson = """

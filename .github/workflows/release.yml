@@ -99,7 +99,7 @@ jobs:
               '$0 ~ "^## " ver "([^0-9.]|$)" { f=1; next } f && /^## / { exit } f { print }' \
               CHANGELOG.md
             echo
-            echo "> 更新检查走 GitHub Releases；应用内下载优先走 Gitee 镜像，失败自动回落到本页附件。"
+            echo "> 更新检查与下载均 **Gitee 优先**（国内可达性好），GitHub 自动兜底；两端发行版附件逐字节一致。"
             echo "> 官方售后群（QQ）：1126843866「沐光事业部」，装不上、用不对都进群说。"
           } > release-notes.md
           echo "name=$OUT" >> "$GITHUB_OUTPUT"
@@ -124,12 +124,12 @@ jobs:
         if: env.HAS_GITEE == 'true'
         env:
           GITEE_TOKEN: ${{ secrets.GITEE_TOKEN }}
-          GITEE_OWNER: ${{ secrets.GITEE_OWNER || 'Ranxian' }}
+          GITEE_OWNER: ${{ secrets.GITEE_OWNER || 'dyed-string' }}
           GITEE_REPO: ${{ secrets.GITEE_REPO || 'muguang' }}
         run: |
           TAG="${{ github.ref_name }}"
           NAME="沐光 v${{ steps.stage.outputs.version }}"
-          OWNER="${GITEE_OWNER:-Ranxian}"
+          OWNER="${GITEE_OWNER:-dyed-string}"
           REPO="${GITEE_REPO:-muguang}"
           BASE="https://gitee.com/api/v5/repos/$OWNER/$REPO/releases"
           APK="${{ steps.stage.outputs.name }}"

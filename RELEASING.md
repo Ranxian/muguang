@@ -70,8 +70,13 @@ workflow 会依次做：单测 → 构建 release → `apksigner verify` 确认�
 
 `api/UpdateApi.kt` 里两个常量决定一切：
 
-- `FEED_REPO` —— 检查更新走 `api.github.com/repos/<FEED_REPO>/releases/latest`
-- `MIRROR_REPO` —— 下载直链拼 `https://gitee.com/<MIRROR_REPO>/releases/download/<tag>/<附件名>`
+- `MIRROR_REPO` —— **检查更新主源**（2026-11 起 Gitee 优先）：
+  `gitee.com/api/v5/repos/<MIRROR_REPO>/releases`；下载直链也拼这里
+  `https://gitee.com/<MIRROR_REPO>/releases/download/<tag>/<附件名>`
+- `FEED_REPO` —— GitHub 兜底：Gitee 不可达/没数据时才查
+  `api.github.com/repos/<FEED_REPO>/releases`，下载同样回落 `browser_download_url`
+
+校验值也同源：Gitee 检查就用 Gitee 发行版的 `.sha256` 附件，GitHub 检查才用 asset digest。
 
 所以**附件名必须与 Gitee 上的完全一致**（workflow 两边用的是同一个文件名），
 少一个字符镜像就 404，此时下载会自动回落到 GitHub 的 `browser_download_url`。

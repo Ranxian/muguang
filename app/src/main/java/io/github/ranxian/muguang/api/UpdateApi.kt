@@ -11,9 +11,9 @@ import java.util.concurrent.TimeUnit
 /**
  * 发布源仓库（GitHub API 的 owner/repo 形式）。
  *
- * **检查更新首选 GitHub**；不可达时自动兜底到 Gitee（见 [UpdateApi.fetchReleases]）。
- * 2026-10 国内网络实测：api.github.com 会整段连接重置，只靠 GitHub 的话
- * 检查更新永远静默失败——用户收不到任何新版本提示。
+ * **GitHub 是下载与 digest 的兜底源**；检查更新已改为 Gitee 优先
+ * （见 [UpdateApi.fetchReleases]，2026-11 起）。2026-10 国内网络实测：
+ * api.github.com 会整段连接重置，只靠 GitHub 的话检查更新要白等十几秒超时。
  */
 private const val FEED_REPO = "Ranxian/muguang"
 
@@ -23,7 +23,8 @@ private const val FEED_REPO = "Ranxian/muguang"
  * 两个用途：
  * 1. **加速下载安装包**：GitHub 附件在大陆走 `objects.githubusercontent.com`，
  *    实测约 100 KB/s；Gitee 约 2 MB/s。
- * 2. **检查更新的兜底源**：GitHub API 连不上时改读 Gitee 发行版列表比版本号。
+ * 2. **检查更新的主源**（2026-11 起）：Gitee API 国内可达性远好于
+ *    api.github.com，检查与校验值都先读 Gitee 发行版，GitHub 降为兜底。
  *    Gitee 与 GitHub 的 tag / 附件名保持一致（发版流程保证），
  *    所以拿到哪个源的信息都能拼出可用的下载直链。
  */
@@ -297,8 +298,9 @@ object UpdateApi {
      * **滤掉预发布**：调用方拿 `firstOrNull()` 当"最新版"来比对，
      * 不过滤的话，只要发过一个标记为 pre-release 的测试版，所有人都会被提示更新到它。
      *
-     * 先查 GitHub；GitHub 不可达（国内会整段连接重置）时改查 Gitee 镜像仓库。
-     * 两个源的 tag 与附件名保持一致，所以无论拿到哪边的数据，下载直链都拼得出来。
+     * 先查 Gitee（国内可达性好），不可达或没数据时改查 GitHub（API 在国内
+     * 会整段连接重置）。两个源的 tag 与附件名保持一致，所以无论拿到哪边的数据，
+     * 下载直链都拼得出来。
      */
     suspend fun fetchReleases(): List<UpdateRelease> {
         // Gitee 优先：国内可达性远好于 api.github.com（2026-11 实测整段断流）；
