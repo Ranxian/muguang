@@ -305,8 +305,13 @@ object UpdateApi {
     suspend fun fetchReleases(): List<UpdateRelease> {
         // Gitee 优先：国内可达性远好于 api.github.com（2026-11 实测整段断流）；
         // 之前 GitHub 优先时，坏网络下检查要白等 8-16s 超时才落到 Gitee。
+        //
+        // ⚠️ 两个源的列表顺序相反（Gitee 旧→新、GitHub 新→旧），而调用方
+        // （MainViewModel.checkUpdate / UserScreen.UpdateCard）都拿 firstOrNull()
+        // 当最新版——**两个分支都必须排成新→旧**再返回。v1.1.4 只排了 GitHub
+        // 分支，结果更新检查拿到 v1.0，永远提示「已是最新」。
         val gitee = fetchGiteeReleases()
-        if (gitee.isNotEmpty()) return gitee
+        if (gitee.isNotEmpty()) return sortNewestFirst(gitee)
         val github = try {
             val json = getJson("/repos/$REPO/releases?per_page=10")
             json?.let {
@@ -318,12 +323,10 @@ object UpdateApi {
             AppLogger.e("解析 releases 失败", e)
             emptyList()
         }
-        // Gitee 没有数据才会走到 GitHub：两个源的顺序习惯不同（Gitee 旧→新），
-        // 统一按版本号新→旧排，交给「拿第一当最新」的调用方
         return sortNewestFirst(github)
     }
 
-    /** Gitee 镜像仓库的发行版列表（最新在前，滤掉预发布）；失败返回空列表 */
+    /** Gitee 镜像仓库的发行版列表（原生顺序旧→新，调用方必须再排序；滤掉预发布）；失败返回空列表 */
     private suspend fun fetchGiteeReleases(): List<UpdateRelease> {
         val json = getGiteeJson("/repos/$GITEE_REPO/releases?per_page=10&page=1") ?: return emptyList()
         return try {
