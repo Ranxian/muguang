@@ -32,4 +32,9 @@ class BillDateParserTest {
 
         assertEquals(expected, BillDateParser.toEpochMillis("2026-09-22 13:14:15", zone))
     }
+
+    @Test
+    fun `default zone follows the server not the device`() {
+        assertEquals(ZoneId.of("Asia/Shanghai"), BillDateParser.defaultZoneId())
+    }
 }

@@ -100,5 +100,10 @@ class PendingSettlementTest {
     private fun epoch(value: String): Long = LocalDateTime.parse(
         value,
         java.time.format.DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss")
-    ).atZone(ZoneId.systemDefault()).toInstant().toEpochMilli()
+    )
+        // 服务器墙钟固定 +08（BillDateParser.defaultZoneId）；用 systemDefault 时，
+        // 跑在 UTC 的 CI 上会整体偏 8 小时，窗口永远对不上。
+        .atZone(ZoneId.of("Asia/Shanghai"))
+        .toInstant()
+        .toEpochMilli()
 }

@@ -62,7 +62,7 @@ object WasherController {
                 snCode = device.snCode,
                 modeTypeId = mode.typeId,
                 auth = NetworkModule.authFields(),
-                isHaier = device.devTypeStatus == 7
+                isHaier = device.isHaierDevice
             )
         } catch (e: CancellationException) {
             throw e
@@ -128,7 +128,7 @@ object WasherController {
             NetworkModule.apiService.queryWasherStatusSafe(
                 snCode = device.snCode,
                 auth = NetworkModule.authFields(),
-                isHaier = device.devTypeStatus == 7
+                isHaier = device.isHaierDevice
             )
         } catch (e: CancellationException) {
             throw e
@@ -162,7 +162,7 @@ object WasherController {
         return try {
             val resp = NetworkModule.apiService.getLastOrderByMacSafe(
                 macAddress = mac,
-                isHaier = device.devTypeStatus == 7
+                isHaier = device.isHaierDevice
             )
             if (resp.success || resp.errorCode == 0) resp.data else null
         } catch (e: CancellationException) {

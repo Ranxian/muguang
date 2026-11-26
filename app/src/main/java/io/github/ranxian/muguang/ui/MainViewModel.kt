@@ -35,6 +35,7 @@ import io.github.ranxian.muguang.data.BoundWasherStore
 import io.github.ranxian.muguang.data.BoundWasherView
 import io.github.ranxian.muguang.data.BoundOrderTracker
 import io.github.ranxian.muguang.data.BleArbiter
+import io.github.ranxian.muguang.data.BleSessionGuard
 import io.github.ranxian.muguang.data.CloseOutcome
 import io.github.ranxian.muguang.data.OpenOutcome
 import io.github.ranxian.muguang.data.ProjectRepository
@@ -649,7 +650,11 @@ class MainViewModel : ViewModel() {
                 startIsObserved = startObserved
             )
             boundWasherViews[device.snCode] = view
-            boundWasherUpdatedAtMs[device.snCode] = nowMs
+            // ⚠️ 这里存**本机**接收时刻，不存 nowMs（服务器时钟）。
+            // 界面倒计时用 System.currentTimeMillis() 与这个值相减，两边必须同一时钟；
+            // 存服务器时刻会把 serverClockOffset 整段算进「已过去多久」，
+            // 手机快/慢几分钟时倒计时会冻结或直接归零。
+            boundWasherUpdatedAtMs[device.snCode] = System.currentTimeMillis()
 
             AppLogger.w(
                 "BOUND ${device.snCode} label=${view.statusLabel}" +
@@ -672,7 +677,7 @@ class MainViewModel : ViewModel() {
                 nowMs = NetworkModule.serverNowMs(),
                 failed = true
             )
-            boundWasherUpdatedAtMs[device.snCode] = NetworkModule.serverNowMs()
+            boundWasherUpdatedAtMs[device.snCode] = System.currentTimeMillis()
         }
     }
 
@@ -1528,8 +1533,12 @@ class MainViewModel : ViewModel() {
                             device.macAddress.isNotBlank()
                         ) {
                             bleRetryDevice = device
+                            // 只留"改用蓝牙"这一个对话框：两个 AlertDialog 同时渲染会
+                            // 叠在一起，用户点掉上面那个才看到下面那个，不知道该按哪个
+                            showerError = null
+                        } else {
+                            showerError = ShowerError(outcome.message, ShowerErrorKind.SERVER_REJECTED)
                         }
-                        showerError = ShowerError(outcome.message, ShowerErrorKind.SERVER_REJECTED)
                         checkKick(outcome.kickHint)
                         mqttManager?.disconnect()
                     }
@@ -1623,10 +1632,14 @@ class MainViewModel : ViewModel() {
                     }
 
                     is WasherStartOutcome.InUseByOthers -> {
+                        // 失败必须收掉模式选择框：否则它会和错误弹窗叠在一起，
+                        // 用户关掉错误框后还停在一个已经不可能成功的选模式页
+                        dismissWasherModes()
                         showerError = ShowerError(outcome.message, ShowerErrorKind.IN_USE_BY_OTHERS)
                     }
 
                     is WasherStartOutcome.Failed -> {
+                        dismissWasherModes()
                         showerError = ShowerError(
                             outcome.message,
                             ShowerErrorKind.WASHER_REJECTED
@@ -1637,6 +1650,7 @@ class MainViewModel : ViewModel() {
                 throw e
             } catch (e: Exception) {
                 AppLogger.e("启动洗烘设备异常", e)
+                dismissWasherModes()
                 showerError = ShowerError(
                     "启动洗衣机失败，请检查网络",
                     ShowerErrorKind.WASHER_REJECTED
@@ -1786,6 +1800,18 @@ class MainViewModel : ViewModel() {
         // 蓝牙通道互斥：小组件服务可能正在操作同一台设备，两边同时 connectGatt 会互抢连接
         if (!BleArbiter.begin(snCode, "app")) {
             showerError = ShowerError("该设备正在处理其他蓝牙操作，请稍候再试", ShowerErrorKind.UNKNOWN_RESULT)
+            return
+        }
+
+        // ⚠️ 同一时刻只允许一台蓝牙表在用水：整个 App 只有一条 BLE 连接，
+        // connect() 会先 disconnect()，开 B 会把 A 的连接掐掉，而 A 的阀还开着。
+        // 必须在这里拦住（详见 BleSessionGuard 的注释）。
+        BleSessionGuard.otherActiveSession(snCode)?.let { other ->
+            BleArbiter.end(snCode)
+            showerError = ShowerError(
+                BleSessionGuard.conflictMessage(other),
+                ShowerErrorKind.IN_USE_BY_OTHERS
+            )
             return
         }
 
@@ -2554,6 +2580,21 @@ class MainViewModel : ViewModel() {
         // 停止蓝牙扫描
         try { scanner?.stopScan() } catch (_: Exception) {}
         isScanning = false
+
+        // 绑定洗衣机/热水器的内存状态与轮询协程跟账号走：
+        // 轮询跑在 viewModelScope（不是 sessionScope），不显式停会一直用旧账号的
+        // loginCode 每 45 秒打一次接口；换账号登录后也会先看到上一任的绑定设备。
+        stopBoundWasherPoll()
+        ownerBySn.clear()
+        boundWasherViews.clear()
+        boundTrackers.clear()
+        boundWashers = emptyList()
+        boundHeater = null
+        boundHeaterView = null
+        boundHeaterRefreshing = false
+        boundWasherRefreshing = false
+        washerModesBySmallType.clear()
+        NetworkModule.clearAuth()
 
         // 重置所有状态
         isShowering = false
@@ -3353,8 +3394,12 @@ class MainViewModel : ViewModel() {
                 }
             }
             try {
-                val fmt = java.text.SimpleDateFormat("yyyy-MM", java.util.Locale.getDefault())
-                val cal = java.util.Calendar.getInstance()
+                // 月份按服务器时区（+08）算，和账单接口的月份口径一致：
+                // 设备时区不是 +08 时，本机月份在月初/月末会差一个月，查不到账。
+                val billZone = java.util.TimeZone.getTimeZone("Asia/Shanghai")
+                val fmt = java.text.SimpleDateFormat("yyyy-MM", java.util.Locale.US)
+                    .apply { timeZone = billZone }
+                val cal = java.util.Calendar.getInstance(billZone)
                 val all = mutableListOf<BillItem>()
                 var allRequestsSucceeded = true
                 for (i in 0..2) {

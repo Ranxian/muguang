@@ -12,6 +12,7 @@ import io.github.ranxian.muguang.api.getDeviceInfoSafe
 import io.github.ranxian.muguang.ble.BleConnectResult
 import io.github.ranxian.muguang.ble.BleController
 import io.github.ranxian.muguang.data.BleArbiter
+import io.github.ranxian.muguang.data.BleSessionGuard
 import io.github.ranxian.muguang.data.BleShowerController
 import io.github.ranxian.muguang.data.ShowerController
 import io.github.ranxian.muguang.data.ShowerEvents
@@ -126,15 +127,28 @@ class WidgetBleService : Service() {
             Notifier.showOpenFailed(this, name, "该设备正在处理其他蓝牙操作，请稍候再试")
             return
         }
+
+        // 同一时刻只允许一台蓝牙表在用水：connect() 会掐断上一条连接，
+        // 开 B 会让 A 的阀失去控制（详见 BleSessionGuard）。
+        BleSessionGuard.otherActiveSession(snCode)?.let { other ->
+            BleArbiter.end(snCode)
+            Notifier.showOpenFailed(this, name, BleSessionGuard.conflictMessage(other))
+            return
+        }
+
+        val ble = BleController(this)
         val outcome = try {
             BleShowerController.openValve(
-                ble = BleController(this),
+                ble = ble,
                 device = device,
                 loginCode = PrefsHelper.loginCode,
                 telephone = PrefsHelper.telephone
             )
         } finally {
             BleArbiter.end(snCode)
+            // 服务是短命的（开完阀就 stopSelf），这里不持有连接给谁复用；
+            // 不断开会在进程里留下一条无人消费的 GATT 连接。
+            runCatching { ble.disconnect() }
         }
         when (outcome) {
             is BleShowerController.OpenOutcome.Opened -> {
@@ -203,8 +217,8 @@ class WidgetBleService : Service() {
         }
 
         val elapsed = ShowerController.elapsedSeconds(snCode)
+        val ble = BleController(this)
         val outcome = try {
-            val ble = BleController(this)
             val conn = try {
                 ble.connect(session.mac)
             } catch (t: Throwable) {
@@ -224,8 +238,14 @@ class WidgetBleService : Service() {
             )
         } finally {
             BleArbiter.end(snCode)
+            // 与开阀同理：服务结束前必须断开，否则 GATT 连接会残留
+            runCatching { ble.disconnect() }
         }
         when (outcome) {
+            // ⚠️ PartialSettlement 的语义是「**水已经关了**，只是账没结完」
+            // （见 closeAndSettle 的返回点），必须按「已关闭」收尾：
+            // 清会话 + 结束本地订单，否则小组件会永远停在「使用中」，
+            // ShowerWatchService 也会一直轮询一个早就不存在的订单。
             is BleShowerController.SettleOutcome.Completed -> {
                 PrefsHelper.bleSessionJson = ""
                 ShowerController.markFinished(snCode)
@@ -236,7 +256,13 @@ class WidgetBleService : Service() {
                 AppLogger.i("小组件蓝牙关阀+结算完成 $snCode 金额=$money")
                 Notifier.showFinished(this, name, elapsed, money)
             }
-            else -> {
+            is BleShowerController.SettleOutcome.PartialSettlement -> {
+                PrefsHelper.bleSessionJson = ""
+                ShowerController.markFinished(snCode)
+                AppLogger.w("小组件蓝牙关阀完成、结算未完成 $snCode：${outcome.message}")
+                Notifier.showFinished(this, name, elapsed, null)
+            }
+            is BleShowerController.SettleOutcome.CloseFailed -> {
                 AppLogger.w("小组件蓝牙关阀未完成：$outcome")
                 Notifier.showCloseFailed(this, name, "关闭设备未确认，请打开 App 重试")
             }

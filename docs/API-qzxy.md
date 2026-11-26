@@ -63,7 +63,7 @@
 | 启动洗衣机 | POST | `/order/tcpDevice/downRate/modeOrder` | ✅ | `xfModel` 传模式 `typeId` |
 | 洗衣机状态 | POST | `/order/tcpDevice/washer/status` | ✅ | 获取订单标识和洗涤/漂洗/脱水阶段 |
 
-### 洗衣机接口（6.5.28 反编译确认）
+### 洗衣机接口（6.5.29 反编译确认）
 
 官方客户端用 `bigTypeId == 6` 进入洗衣机页面。本版只接入洗衣机，
 `bigTypeId == 7` 的烘干机不进入此流程。
@@ -630,7 +630,7 @@ POST /account/useCode/new/generate
 Content-Type: application/x-www-form-urlencoded
 
 loginCode=xxx&userId=xxx&accountId=xxx&projectId=xxx&
-telephone=xxx&telPhone=xxx&phoneSystem=android&version=6.5.28
+telephone=xxx&telPhone=xxx&phoneSystem=android&version=6.5.29
 ```
 
 ```json

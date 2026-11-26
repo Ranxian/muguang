@@ -234,9 +234,36 @@ object ShowerController {
         }
 
         // 2. 下发开阀指令
-        val resp = NetworkModule.apiService.downRateSafe(
-            snCode = snCode, auth = NetworkModule.authFields()
-        )
+        //
+        // ⚠️ 这个请求**可能已经在服务端生效**，只是客户端等不到响应（超时/断连）。
+        // 以前异常会一路冒到上层，被统一当成「开阀失败」——水已经开了，但本地没落单、
+        // 没启动监控、也没有任何关阀入口，直到设备自己超时才停。
+        // 出错时立刻用 queryUsing 复核一次：有单就是成功，没单返回「结果未知」，
+        // 不要武断地报「失败」诱导用户再点一次（可能重复下单）。
+        val resp = try {
+            NetworkModule.apiService.downRateSafe(
+                snCode = snCode, auth = NetworkModule.authFields()
+            )
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            AppLogger.w("下发开阀指令失败，复核服务端状态：${e.message}")
+            val check = runCatching {
+                NetworkModule.apiService.queryUsingSafe(
+                    snCode = snCode, auth = NetworkModule.authFields()
+                )
+            }.getOrNull()
+            if (check != null && (check.errorCode == 307 || check.data?.orderNo != null)) {
+                if (check.data?.isOwner == false) {
+                    return OpenOutcome.InUseByOthers("该设备正在被他人使用")
+                }
+                val orderNo = check.data?.orderNo ?: ""
+                ensureActiveOrder(snCode, orderNo, device)
+                rememberDevice(device)
+                return OpenOutcome.Resumed(orderNo)
+            }
+            return OpenOutcome.Unknown
+        }
         // ⚠️ errorCode 必须带上：上层要用它判断「是不是 306 设备不在线」，
         // 从而决定要不要引导用户改用蓝牙。丢掉它就只能去匹配文案了。
         if (!resp.success) {

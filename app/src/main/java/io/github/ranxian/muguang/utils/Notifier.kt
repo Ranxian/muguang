@@ -384,10 +384,11 @@ object Notifier {
         val h = sec / 3600
         val m = (sec % 3600) / 60
         val s = sec % 60
+        // 固定 Locale.US：默认 Locale 在阿拉伯语等环境下会把数字换成非 ASCII 字形
         return when {
-            h > 0 -> "%d 小时 %02d 分".format(h, m)
-            m > 0 -> "%d 分 %d 秒".format(m, s)
-            else -> "%d 秒".format(s)
+            h > 0 -> String.format(java.util.Locale.US, "%d 小时 %02d 分", h, m)
+            m > 0 -> String.format(java.util.Locale.US, "%d 分 %d 秒", m, s)
+            else -> String.format(java.util.Locale.US, "%d 秒", s)
         }
     }
 

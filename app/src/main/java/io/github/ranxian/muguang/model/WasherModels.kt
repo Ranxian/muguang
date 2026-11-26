@@ -83,7 +83,7 @@ data class WasherStartData(
 
 data class WasherStatus(
     val isOwner: Boolean = true,
-    @SerializedName(value = "modelName", alternate = ["modeName"])
+    @SerializedName(value = "modelName", alternate = ["modeName", "xfModelName"])
     val modelName: String? = null,
     val modeTime: Int = 0,
     val modeMoney: Int = 0,
@@ -102,6 +102,8 @@ data class WasherStatus(
     val liquidOrderStatusDisplay: String? = null,
     val liquidModeName: String? = null,
     val liquidConsumeMoney: Int = 0,
+    /** 预扣金额（官方 `SnWasherStatusResponse` 主键 `perMoney`，别名 `preDeductMoney`） */
+    @SerializedName(value = "perMoney", alternate = ["preDeductMoney"])
     val perMoney: Int = 0,
     val leftModeName: String? = null,
     val leftModeMoney: Int = 0,

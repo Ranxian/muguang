@@ -34,7 +34,7 @@ object NetworkModule {
             "telephone" to telephone,
             "telPhone" to telephone,
             "phoneSystem" to "android",
-            "version" to "6.5.28"
+            "version" to CLIENT_VERSION
         ))
         selectedSession = session
         if (PrefsHelper.isInitialized && projectId.isNotBlank()) {
@@ -43,6 +43,17 @@ object NetworkModule {
     }
 
     fun authFields(): Map<String, String> = session().fields
+
+    /**
+     * 清空当前会话。
+     *
+     * 登出/被挤号后必须调用：旧 `loginCode` 继续挂在 `selectedSession` 上时，
+     * 任何没被取消的后台任务（绑定洗衣机 45s 轮询等）都会拿着上一个账号的
+     * 凭证继续发请求。
+     */
+    fun clearAuth() {
+        selectedSession = ProjectSession(emptyMap())
+    }
 
     fun session(): ProjectSession = ProjectSession.current.get()
         ?: selectedSession
@@ -127,7 +138,7 @@ object NetworkModule {
                 // 只看状态码完全看不出来，只能靠读 errorMessage。
                 .addQueryParameter("telPhone", session.telephone)
                 .addQueryParameter("phoneSystem", "android")
-                .addQueryParameter("version", "6.5.28")
+                .addQueryParameter("version", CLIENT_VERSION)
             builder.url(urlBuilder.build())
         }
 

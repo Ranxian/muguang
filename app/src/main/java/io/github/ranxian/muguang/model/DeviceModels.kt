@@ -1,20 +1,36 @@
 package io.github.ranxian.muguang.model
 
+import com.google.gson.annotations.SerializedName
+
 data class DeviceInfo(
+    /** 官方 DTO 主键是 PascalCase（`DevID`），camelCase 只是别名；两边都接 */
+    @SerializedName(value = "deviceId", alternate = ["DevID"])
     val deviceId: Int,
+    @SerializedName(value = "deviceName", alternate = ["DevName"])
     val deviceName: String,
     val snCode: String,
+    /** 官方主键是 `devMac`（别名 `macAddress`）——只认 camelCase 时老接口拿不到 MAC */
+    @SerializedName(value = "macAddress", alternate = ["devMac"])
     val macAddress: String,
+    /**
+     * ⚠️ 官方 DTO 里这是 **String**（可能下发空串），这里保持 Double 但注册了
+     * 宽松 TypeAdapter（见 `SafeApi`）：空串/非数字按 0 处理，不会让整条设备信息解析失败。
+     */
     val withholdMoney: Double,
+    @SerializedName(value = "onlineStatusId", alternate = ["isOnline"])
     val onlineStatusId: Int,
     // 服务器返回的设备大类（饮水机 = 5），用于精确识别；缺失时回退到名称判断
+    @SerializedName(value = "bigTypeId", alternate = ["Dsbtypeid"])
     val bigTypeId: Int? = null,
+    @SerializedName(value = "bigTypeName", alternate = ["DsbName"])
     val bigTypeName: String? = null,
     /**
      * 服务端的小类 id。`=1`（名称通常是「热水表」）那类是**只能靠手机蓝牙直连**
      * 控制的水表，本项目未实现该通道。见 [needsBluetoothControl]。
      */
+    @SerializedName(value = "smallTypeId", alternate = ["DevTypeID"])
     val smallTypeId: Int? = null,
+    @SerializedName(value = "smallTypeName", alternate = ["DevTypeName"])
     val smallTypeName: String? = null,
     /**
      * **服务端直接标记的蓝牙设备**——判断蓝牙表最可靠的字段。
@@ -30,8 +46,13 @@ data class DeviceInfo(
     val communicationTypeId: Int? = null,
     /** 真实 MAC。部分设备 `macAddress` 是虚拟的，优先用这个 */
     val realMac: String? = null,
+    /**
+     * 官方主键 `devTypeStatus`。部分老接口只发 `communicationTypeId`，
+     * 海尔分支判据统一走 [isHaierDevice]（两者取第一个非空）。
+     * ⚠️ 不能给本字段加 `communicationTypeId` 别名——下面已有同名字段，
+     * Gson 会报 "declares multiple JSON fields"。
+     */
     val devTypeStatus: Int? = null,
-    val isOnline: Int? = null,
     val childTypeId: Int? = null,
     val bindDeviceSnCode: String? = null
 ) {
@@ -64,6 +85,9 @@ data class DeviceInfo(
      * 在那之前，蓝牙表的入口应当由用户手动指定，而不是靠猜。
      */
     val needsBluetoothControl: Boolean get() = isBle == true
+
+    /** 海尔设备：官方 `isHaier` 分支按 `devTypeStatus == 7` 判断，老接口回落 `communicationTypeId` */
+    val isHaierDevice: Boolean get() = (devTypeStatus ?: communicationTypeId) == 7
 
     val isWasher: Boolean get() =
         bigTypeId == 6 ||

@@ -27,6 +27,11 @@ data class UserAccount(
 )
 
 data class WalletData(
+    /**
+     * 官方 `MyWalletResponse.accountMoney` 是主键、`accountRealMoney` 是别名；
+     * 实测本校下发的是别名侧，但换学校/换版本后主键侧也可能出现，两边都接。
+     */
+    @SerializedName(value = "accountRealMoney", alternate = ["accountMoney"])
     val accountRealMoney: Double,
     val accountGivenMoney: Double,
     val money: String
@@ -73,10 +78,21 @@ data class CampusUserInfo(
 )
 
 data class OrderStatus(
+    /**
+     * 官方 `SnWaterResponse.Data.timeIds` 是主键、`orderNo` 是别名。
+     * 只认 `orderNo` 时，按官方主键下发的学校会拿不到订单号，
+     * 表现为「明明在用，恢复/关阀却找不到订单」。
+     */
+    @SerializedName(value = "orderNo", alternate = ["timeIds"])
     val orderNo: String? = null,
     val state: Int? = null,
     val snCode: String? = null,
-    val isOwner: Boolean = true
+    val isOwner: Boolean = true,
+    /** 同一响应里的另一个订单号字段（官方 `liquidOrderNo`），留作兜底 */
+    val liquidOrderNo: String? = null,
+    /** 预扣金额（分/厘口径由服务端决定，仅展示用） */
+    @SerializedName(value = "perMoney", alternate = ["preDeductMoney"])
+    val perMoney: Int? = null
 )
 
 data class BillItem(
@@ -153,7 +169,8 @@ data class BillDTO(
 data class UseCodeData(
     val useCode: String? = null,
     val useCodeStatus: Int? = null,
-    /** 手机号后三位，跟 `useCode` 的末三位相同 */
+    /** 手机号后三位，跟 `useCode` 的末三位相同（官方主键 `randomCode`） */
+    @SerializedName(value = "useCodeRandom", alternate = ["randomCode"])
     val useCodeRandom: String? = null,
     val useCodeStartTime: String? = null,
     /**
@@ -203,10 +220,20 @@ data class ProjectSwitchAccount(
  */
 data class UnpaidBill(
     val orderId: String? = null,
+    @SerializedName(value = "orderNo", alternate = ["timeIds"])
     val orderNo: String? = null,
     val consumeDate: String? = null,
+    /**
+     * 官方 `BillInfoBean` 的金额主键是 `upMoney`（别名 `consumeMoneyReal`），
+     * 且**没有** `consumeMoney` 字段。只认 `consumeMoney` 会让欠费金额显示为空。
+     * Gson 会把数字读进 String，无需改类型。
+     */
+    @SerializedName(value = "consumeMoney", alternate = ["upMoney", "consumeMoneyReal"])
     val consumeMoney: String? = null,
-    val description: String? = null
+    val description: String? = null,
+    /** 预扣金额（官方 `perMoney`/`preDeductMoney`），部分学校用它展示欠费额 */
+    @SerializedName(value = "perMoney", alternate = ["preDeductMoney"])
+    val perMoney: String? = null
 )
 
 /**
@@ -236,20 +263,29 @@ data class BillDetail(
  * 用于确认 downRate 开阀是否真正成功，同时可携带 autoDisConTime（自动关停秒数）。
  */
 data class DownRateResult(
-    /** 订单号 */
+    /**
+     * 订单号。官方 `DownRateMqttBean` 的主键是 `timeIds`（`orderNo` 才是别名），
+     * 只认 `orderNo` 时按官方主键下发的学校拿不到订单号 → 关阀/结算匹配失败。
+     */
+    @SerializedName(value = "orderNo", alternate = ["timeIds"])
     val orderNo: String? = null,
     /** 自动关停时间（秒），如 600 = 10 分钟 */
     val autoDisConTime: Int? = null,
     /** 状态码，0 通常表示开阀成功 */
     val state: Int? = null,
     val result: Int? = null,
-    /** 预扣金额 */
+    /** 预扣金额（官方主键 `perMoney`，别名 `preDeductMoney`） */
+    @SerializedName(value = "preDeductMoney", alternate = ["perMoney"])
     val preDeductMoney: Double? = null,
     val preDeductMoneySend: Double? = null,
     /** 费率 */
     val rate: Double? = null,
-    /** 设备序列号 */
-    val snCode: String? = null
+    /** 设备序列号（官方主键 `deviceSncode`，别名 `deviceSnCode`） */
+    @SerializedName(value = "snCode", alternate = ["deviceSncode", "deviceSnCode"])
+    val snCode: String? = null,
+    /** 下单时间（官方主键 `consumeDT`，别名 `consumeDate`） */
+    @SerializedName(value = "consumeDate", alternate = ["consumeDT"])
+    val consumeDate: String? = null
 )
 
 /**
@@ -259,7 +295,8 @@ data class DownRateResult(
  * 命名可能因学校而异，故用 @SerializedName 做多字段容错。
  */
 data class CloseOrderResult(
-    /** 订单号 */
+    /** 订单号（官方部分响应同样用 `timeIds`） */
+    @SerializedName(value = "orderNo", alternate = ["timeIds"])
     val orderNo: String? = null,
     /** 订单状态：1=使用中，0=已关闭（部分服务器用 state） */
     val state: Int? = null,
@@ -267,12 +304,19 @@ data class CloseOrderResult(
     val status: Int? = null,
     /** 操作结果码，0 通常表示成功 */
     val result: Int? = null,
-    /** 最终消费金额（元，数字形式） */
+    /**
+     * 最终消费金额（元，数字形式）。
+     * 官方 `PostConsumeData` 主键是 `upMoney`（`consumeMoneyReal` 也是别名侧），
+     * 只认 `consumeMoney` 会丢金额。
+     */
+    @SerializedName(value = "consumeMoney", alternate = ["upMoney", "consumeMoneyReal"])
     val consumeMoney: Double? = null,
     /** 最终消费金额（元，字符串形式，部分学校返回） */
     @SerializedName("consumeMoneyStr") val consumeMoneyStr: String? = null,
-    /** 结算时间 */
+    /** 结算时间（官方主键 `fishTime`） */
+    @SerializedName(value = "consumeTime", alternate = ["fishTime"])
     val consumeTime: String? = null,
     /** 设备序列号 */
+    @SerializedName(value = "deviceSnCode", alternate = ["deviceSncode"])
     val deviceSnCode: String? = null
 )

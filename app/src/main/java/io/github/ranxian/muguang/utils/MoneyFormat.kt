@@ -1,5 +1,7 @@
 package io.github.ranxian.muguang.utils
 
+import java.util.Locale
+
 /**
  * 金额显示的统一格式化。
  *
@@ -16,7 +18,9 @@ object MoneyFormat {
 
     /** 金额数字（不带货币符号）：`0.025` → `"0.025"`，`5.0` → `"5.0"` */
     fun format(value: Double): String {
-        val s = "%.3f".format(value)
+        // 固定 Locale.US：`"%.3f".format()` 用系统默认 Locale，德语/法语下会输出
+        // `0,025`（逗号小数点），阿拉伯语等还会换数字；金额绝不能跟着系统语言变。
+        val s = String.format(Locale.US, "%.3f", value)
         return if (s.endsWith('0')) s.dropLast(1) else s
     }
 

@@ -324,7 +324,9 @@ object SettlementEngine {
         startTimeMs: Long,
         snCode: String
     ): BillProbe {
-        val month = java.time.YearMonth.now().toString()
+        // 月份按**服务器时区**算：跨境/改时区的设备上，本地月份可能比服务器早/晚一个月，
+        // 结算会去查一个还没有账单的月份（账单接口按 yyyy-MM 精确匹配）。
+        val month = java.time.YearMonth.now(java.time.ZoneId.of("Asia/Shanghai")).toString()
 
         // ⚠️ 兜底时间窗必须**往前放宽**，不能拿 `>= startTimeMs` 卡。
         //

@@ -20,7 +20,12 @@ interface QzxyService {
         @Field("password") password: String,
         @Field("phoneSystem") phoneSystem: String = "android",
         @Field("type") type: Int = 0,
-        @Field("version") version: String = "6.5.28"
+        /**
+         * 官方 6.5.29 `LoginPassActivity` 会带一个空的 `identifier`（渠道/设备标识位）。
+         * 服务端目前忽略它，但按官方请求原样带上，避免以后按字段存在性分流。
+         */
+        @Field("identifier") identifier: String = "",
+        @Field("version") version: String = CLIENT_VERSION
     ): Call<ResponseBody>
 
     @GET("/account/wallet")
@@ -28,7 +33,12 @@ interface QzxyService {
 
     @GET("/device/info/mac")
     fun getDeviceInfo(
-        @Query("macAddress") mac: String
+        @Query("macAddress") mac: String,
+        /**
+         * 官方 6.5.29 的 5 处 `/device/info/mac` 调用**全部**带 `isNew=1`；
+         * 缺省时服务端可能按老 DTO 下发（字段名不同）。默认值保证所有调用方对齐。
+         */
+        @Query("isNew") isNew: Int = 1
     ): Call<ResponseBody>
 
     @FormUrlEncoded
@@ -51,7 +61,9 @@ interface QzxyService {
     @POST("/order/tcpDevice/query/downRateResult")
     fun downRateResult(
         @Field("snCode") snCode: String,
-        @FieldMap auth: Map<String, String>
+        @FieldMap auth: Map<String, String>,
+        /** 官方 `BaseDeviceActivity.Q4` 的下发参数是 `snCode` + `xfModel="0"`。 */
+        @Field("xfModel") xfModel: String = "0"
     ): Call<ResponseBody>
 
     @FormUrlEncoded
@@ -298,7 +310,14 @@ interface QzxyService {
         @Query("telephone") telephone: String,
         @Query("secret") secret: String,
         @Query("typeId") typeId: Int = 3,
-        @Query("platform") platform: Int = 1
+        @Query("platform") platform: Int = 1,
+        /**
+         * 官方走 `BaseNetActivity.t0()` 统一补 `phoneSystem` / `version`。
+         * 本接口在登出态调用，拦截器不会补（它只给已登录 GET 加认证参数），
+         * 这里显式带上，保证与官方请求逐字段一致。
+         */
+        @Query("phoneSystem") phoneSystem: String = "android",
+        @Query("version") version: String = CLIENT_VERSION
     ): Call<ResponseBody>
 
     @FormUrlEncoded
@@ -308,7 +327,7 @@ interface QzxyService {
         @Field("smsCode") smsCode: String,
         @Field("type") type: Int = 5,
         @Field("phoneSystem") phoneSystem: String = "android",
-        @Field("version") version: String = "6.5.28"
+        @Field("version") version: String = CLIENT_VERSION
     ): Call<ResponseBody>
 
     // ════════════════════════════════════════════

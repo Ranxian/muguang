@@ -1,6 +1,8 @@
 package io.github.ranxian.muguang.api
 
 import com.google.gson.Gson
+import com.google.gson.GsonBuilder
+import com.google.gson.JsonDeserializer
 import com.google.gson.JsonParser
 import io.github.ranxian.muguang.model.AccountInfo
 import io.github.ranxian.muguang.model.BaseResponse
@@ -39,7 +41,31 @@ import retrofit2.Response
 import kotlin.coroutines.resume
 import kotlin.coroutines.resumeWithException
 
-private val gson = Gson()
+/**
+ * 宽松的 Double 反序列化。
+ *
+ * 官方 DTO 里多个金额字段是 **String**（`DeviceInfo.withholdMoney`、`DownFateBean.perMoney`
+ * 等），服务端会下发空串；而本项目把其中一部分声明成 Double。Gson 对 `"": Double`
+ * 会直接抛 `JsonSyntaxException` —— 一条空串足以让**整条设备/订单响应解析失败**，
+ * 表现为「设备信息获取失败」，而不是某个金额显示为空。
+ *
+ * 这里统一把 null/空串/非数字按 0 处理，数字/数字字符串正常取值。
+ * 代价是坏数据不再报错（静默归零），但对「展示型金额」来说，可用性优先。
+ */
+private val lenientDouble = JsonDeserializer<Double> { json, _, _ ->
+    when {
+        json == null || json.isJsonNull -> null
+        json.isJsonPrimitive && json.asJsonPrimitive.isNumber -> json.asDouble
+        json.isJsonPrimitive && json.asJsonPrimitive.isString ->
+            json.asString.trim().toDoubleOrNull() ?: 0.0
+        else -> 0.0
+    }
+}
+
+internal val apiGson = GsonBuilder()
+    .registerTypeAdapter(Double::class.java, lenientDouble)
+    .registerTypeAdapter(Double::class.javaObjectType, lenientDouble)
+    .create()
 
 private suspend fun Call<ResponseBody>.awaitString(): String {
     return suspendCancellableCoroutine { cont ->
@@ -73,7 +99,7 @@ private fun <T> parse(json: String, dataClass: Class<T>): BaseResponse<T> {
     val msg = obj.get("msg")?.let { if (it.isJsonNull) null else it.asString }
     val dataElement = obj.get("data")
     val data: T? = if (dataElement != null && !dataElement.isJsonNull) {
-        gson.fromJson(dataElement, dataClass)
+        apiGson.fromJson(dataElement, dataClass)
     } else null
     return BaseResponse(success, data, errorCode, errorMessage, msg)
 }
@@ -88,7 +114,7 @@ private fun <T> parseList(json: String, elementClass: Class<T>): BaseResponse<Li
     val data: List<T>? = if (dataElement != null && !dataElement.isJsonNull && dataElement.isJsonArray) {
         val result = mutableListOf<T>()
         for (item in dataElement.asJsonArray) {
-            result.add(gson.fromJson(item, elementClass))
+            result.add(apiGson.fromJson(item, elementClass))
         }
         result
     } else null
@@ -100,7 +126,7 @@ suspend fun QzxyService.loginSafe(
     password: String,
     phoneSystem: String = "android",
     type: Int = 0,
-    version: String = "6.5.28"
+    version: String = CLIENT_VERSION
 ): BaseResponse<LoginData> = parse(login(telephone, password, phoneSystem, type, version).awaitString(), LoginData::class.java)
 
 suspend fun QzxyService.getWalletSafe(): BaseResponse<WalletData> =
@@ -459,7 +485,7 @@ suspend fun QzxyService.placeRechargeOrderSafe(
     body["telPhone"] = telPhone
     body["loginCode"] = loginCode
     body["phoneSystem"] = "android"
-    body["version"] = "6.5.28"
+    body["version"] = CLIENT_VERSION
 
     val json = when (channel) {
         RechargeChannel.ALIPAY -> alipayRecharge(body).awaitString()
